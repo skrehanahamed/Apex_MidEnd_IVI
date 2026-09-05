@@ -1,0 +1,142 @@
+<!DOCTYPE RCC>
+<!--
+============================================================================
+Project: Apex IVI - Automotive In-Vehicle Infotainment System
+Developer: Sk Rehan Ahamed
+============================================================================
+-->
+<RCC version="1.0">
+    <qresource prefix="/">
+        <!-- Branding & Wallpaper -->
+        <file>assets/branding/apex_logo.png</file>
+        <file>assets/apex_logo.png</file>
+        <file>assets/image.png</file>
+
+        <!-- Typography Fonts -->
+        <file>assets/fonts/Roboto-Regular.ttf</file>
+        <file>assets/fonts/Roboto-Medium.ttf</file>
+        <file>assets/fonts/Roboto-Bold.ttf</file>
+
+        <!-- Vehicle -->
+        <file>assets/vehicle/car_cabin.png</file>
+        <file>assets/vehicle/drvm_clean_camera_feed.png</file>
+        <file>assets/vehicle/drvm_reverse_camera_feed.png</file>
+        <file>assets/vehicle/drvm_parking_guidelines.png</file>
+        <file>assets/vehicle/drvm_car_sensor.png</file>
+
+        <!-- App Icons -->
+        <file>assets/apps/icon_all_menus.png</file>
+        <file>assets/apps/icon_phone.png</file>
+        <file>assets/apps/icon_media.png</file>
+        <file>assets/apps/icon_settings.png</file>
+        <file>assets/apps/icon_sound.png</file>
+        <file>assets/apps/icon_all_manual.png</file>
+        <file>assets/apps/icon_all_drvm.png</file>
+        <file>assets/apps/icon_all_quietmode.png</file>
+        <file>assets/apps/icon_all_radio.png</file>
+        <file>assets/apps/icon_all_voicememo.png</file>
+        <file>assets/apps/icon_all_projection.png</file>
+        <file>assets/apps/icon_all_phone.png</file>
+        <file>assets/apps/icon_all_media.png</file>
+        <file>assets/apps/icon_all_settings.png</file>
+
+        <!-- Bluetooth Icons & Pairing Guide -->
+        <file>assets/bluetooth/icon_bt_audio.png</file>
+        <file>assets/bluetooth/icon_bt_headset.png</file>
+        <file>assets/bluetooth/icon_bt_music.png</file>
+        <file>assets/bluetooth/icon_device_conn.png</file>
+        <file>assets/bluetooth/bt_guide_5phones.png</file>
+        <file>assets/bluetooth/bt_guide_step1.png</file>
+        <file>assets/bluetooth/bt_guide_step2.png</file>
+        <file>assets/bluetooth/bt_guide_step3.png</file>
+        <file>assets/bluetooth/bt_guide_step4.png</file>
+        <file>assets/bluetooth/bt_guide_step5.png</file>
+
+        <!-- Phone Icons -->
+        <file>assets/phone/icon_phone_callhistory.png</file>
+        <file>assets/phone/icon_phone_phonebook.png</file>
+        <file>assets/phone/icon_phone_dialpad.png</file>
+        <file>assets/phone/icon_phone_device_switch.png</file>
+        <file>assets/phone/icon_phone_green.png</file>
+        <file>assets/phone/icon_call_incoming.png</file>
+        <file>assets/phone/icon_call_outgoing.png</file>
+        <file>assets/phone/icon_call_details.png</file>
+
+        <!-- UI & Navigation Icons -->
+        <file>assets/ui/icon_home.png</file>
+        <file>assets/ui/icon_back.png</file>
+        <file>assets/ui/icon_settings_hdr.png</file>
+        <file>assets/ui/icon_button.png</file>
+        <file>assets/ui/icon_general.png</file>
+        <file>assets/ui/icon_display.png</file>
+        <file>assets/ui/icon_widget_radiomedia.png</file>
+        <file>assets/ui/phone_projection.png</file>
+        <file>assets/ui/qr_manual.png</file>
+        <file>assets/ui/icon_quiet_mode.png</file>
+        <file>assets/ui/icon_all_menus_hdr.png</file>
+        <file>assets/ui/icon_volume_speaker.png</file>
+
+        <!-- Media Icons -->
+        <file>assets/media/icon_media_fm.png</file>
+        <file>assets/media/icon_media_bluetooth.png</file>
+        <file>assets/media/icon_media_usb.png</file>
+        <file>assets/media/icon_media_androidauto.png</file>
+        <file>assets/media/icon_media_carplay.png</file>
+        <file>assets/media/icon_media_am.png</file>
+        <file>assets/media/media_player_bg.png</file>
+
+        <!-- Voice Memo Assets -->
+        <file>assets/voicememo/icon_clipboard_mic.png</file>
+        <file>assets/voicememo/icon_mic_level.png</file>
+        <file>assets/voicememo/icon_circle_record.png</file>
+        <file>assets/voicememo/icon_stop_square.png</file>
+        <file>assets/voicememo/icon_top_left.png</file>
+        <file>assets/voicememo/icon_top_right.png</file>
+        <file>assets/voicememo/icon_pause.png</file>
+        <file>assets/voicememo/icon_play.png</file>
+        <file>assets/voicememo/icon_prev.png</file>
+        <file>assets/voicememo/icon_next.png</file>
+        <file>assets/voicememo/icon_record_dot.png</file>
+        <file>assets/voicememo/icon_info.png</file>
+
+        <!-- Sound Effects -->
+        <file>assets/sounds/record_start.wav</file>
+        <file>assets/sounds/record_stop.wav</file>
+
+        <!-- QML Main -->
+        <file>qml/Main.qml</file>
+
+        <!-- QML Screens -->
+        <file>qml/components/screens/HomeScreen.qml</file>
+        <file>qml/components/screens/AllMenusScreen.qml</file>
+        <file>qml/components/screens/PhoneScreen.qml</file>
+        <file>qml/components/screens/SettingsScreen.qml</file>
+        <file>qml/components/screens/SoundSettingsScreen.qml</file>
+        <file>qml/components/screens/DisplaySettingsScreen.qml</file>
+        <file>qml/components/screens/ButtonSettingsScreen.qml</file>
+        <file>qml/components/screens/GeneralSettingsScreen.qml</file>
+        <file>qml/components/screens/AnalogueClockFace.qml</file>
+        <file>qml/components/screens/DeviceConnectionScreen.qml</file>
+        <file>qml/components/screens/BluetoothConnectionsScreen.qml</file>
+        <file>qml/components/screens/ManualScreen.qml</file>
+        <file>qml/components/screens/EditWidgetScreen.qml</file>
+        <file>qml/components/screens/EditHomeIconsScreen.qml</file>
+        <file>qml/components/screens/RearrangeSettingsScreen.qml</file>
+        <file>qml/components/screens/QuietModeScreen.qml</file>
+        <file>qml/components/screens/MediaSelectScreen.qml</file>
+        <file>qml/components/screens/RadioScreen.qml</file>
+        <file>qml/components/screens/VoiceMemoScreen.qml</file>
+        <file>qml/components/screens/DrvmScreen.qml</file>
+        <file>qml/components/screens/ApexLoadingScreen.qml</file>
+
+        <!-- QML Navigation & Chrome -->
+        <file>qml/components/navigation/TopStatusBar.qml</file>
+        <file>qml/components/navigation/BottomDock.qml</file>
+
+        <!-- QML Icons -->
+        <file>qml/components/icons/AllMenusIcon.qml</file>
+        <file>qml/components/icons/PhoneIcon.qml</file>
+        <file>qml/components/icons/MediaIcon.qml</file>
+        <file>qml/components/icons/SettingsIcon.qml</file>
+    </qresource>
+</RCC>

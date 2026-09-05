@@ -1,0 +1,55 @@
+name: Windows Build & Verification
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build (Windows 2022 / Qt 6.6.3 MSVC)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC Environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Ninja Build System
+        uses: ashutoshvarma/setup-ninja@master
+        with:
+          version: 1.11.1
+
+      - name: Install Qt 6.6.3 MSVC
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.6.3'
+          arch: win64_msvc2019_64
+          modules: 'qtmultimedia'
+          mirror: 'https://download.qt.io'
+          cache: true
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile Apex IVI
+        run: |
+          cmake --build build --config Release --parallel
+
+      - name: Verify Binary Output
+        shell: pwsh
+        run: |
+          if (Test-Path "build/ApexIVI.exe") {
+            Write-Host "Verification Success: build/ApexIVI.exe found and compiled successfully."
+            Get-Item "build/ApexIVI.exe" | Select-Object Name, Length, LastWriteTime
+          } else {
+            Write-Error "Verification Failure: build/ApexIVI.exe binary was not generated!"
+            exit 1
+          }

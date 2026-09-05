@@ -1,0 +1,78 @@
+@startuml system_architecture
+!theme plain
+skinparam backgroundColor #0A0E17
+skinparam defaultFontName "Roboto"
+skinparam defaultFontColor #E6EDF3
+skinparam packageBackgroundColor #161B22
+skinparam packageBorderColor #30363D
+skinparam nodeBackgroundColor #1F242C
+skinparam nodeBorderColor #388BFD
+skinparam componentBackgroundColor #162638
+skinparam componentBorderColor #1F6FEB
+skinparam componentFontColor #FFFFFF
+skinparam interfaceBorderColor #58A6FF
+skinparam arrowColor #58A6FF
+
+title Apex MidEnd IVI - System Architecture\nDeveloper: Sk Rehan Ahamed
+
+package "Presentation Layer (Qt Quick / QML 60 FPS)" as Presentation {
+    [Root Viewport Window (1280x720)] as RootWindow
+
+    package "Cockpit Navigation & Chrome" {
+        [SYS-01: Top Status Bar] as TopBar
+        [SYS-08: Floating Volume Engine] as VolumeEngine
+        [Bottom OEM Dock] as BottomDock
+    }
+
+    package "Automotive Screen Subsystem" {
+        [SYS-02: Cockpit Home (Dual-Card)] as HomeScreen
+        [SYS-03: Radio Tuner (FM/AM Two-Tone)] as RadioScreen
+        [SYS-04: Media Hub (BT / USB / Projection)] as MediaScreen
+        [SYS-05: Telephony Suite (Phone / Contacts)] as PhoneScreen
+        [SYS-06: Voice Memo Studio] as VoiceMemoScreen
+        [SYS-07: DRVM Rear View & Trajectory] as DrvmScreen
+        [General & Display Settings] as SettingsScreen
+    }
+
+    RootWindow --> TopBar
+    RootWindow --> VolumeEngine
+    RootWindow --> BottomDock
+    RootWindow --> HomeScreen
+    RootWindow --> RadioScreen
+    RootWindow --> MediaScreen
+    RootWindow --> PhoneScreen
+    RootWindow --> VoiceMemoScreen
+    RootWindow --> DrvmScreen
+    RootWindow --> SettingsScreen
+}
+
+package "Controller & State Layer (C++20 QObject Engine)" as Backend {
+    [SystemController Singleton] as SystemCtrl
+    [GlobalActivityFilter (Inactivity / Dimming)] as ActivityFilter
+
+    package "Engine Service Modules" {
+        [Radio Stream Engine (QMediaPlayer / Icecast)] as RadioEngine
+        [OEM Audio Suite (QSoundEffect / EQ)] as AudioSuite
+        [CAN Telemetry Engine (Radar / Parking)] as TelemetryEngine
+        [Persistent Store (QSettings Cache)] as SettingsStore
+    }
+
+    SystemCtrl --> RadioEngine
+    SystemCtrl --> AudioSuite
+    SystemCtrl --> TelemetryEngine
+    SystemCtrl --> SettingsStore
+}
+
+package "Hardware Abstraction & OS Layer" as HAL {
+    [Native Audio Driver (AVFoundation / ALSA / Windows MF)] as NativeAudio
+    [GPU Hardware Compositor (Metal / Vulkan / GL)] as GPU
+    [Automotive CAN Bus Mock (Gear R / Rotary Sync)] as CANMock
+}
+
+Presentation <..> SystemCtrl : "Q_PROPERTY / Q_INVOKABLE"
+ActivityFilter --> SystemCtrl : "Event Interception"
+SystemCtrl <--> NativeAudio : "Low-latency Audio Capture"
+SystemCtrl <--> CANMock : "Reverse Camera & Steering Angle"
+Presentation --> GPU : "Hardware Accelerated 60 FPS"
+
+@enduml

@@ -1,0 +1,41 @@
+name: macOS Build & Verification
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build (macOS / Native Qt 6)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6 and Ninja via Homebrew
+        run: |
+          brew update --quiet
+          brew install qt ninja
+
+      - name: Configure CMake
+        run: |
+          QT_PATH=$(brew --prefix qt)
+          cmake -B build -S . \
+            -GNinja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_PATH"
+
+      - name: Compile Apex IVI
+        run: |
+          cmake --build build --parallel
+
+      - name: Verify Binary Output
+        run: |
+          test -f build/ApexIVI
+          file build/ApexIVI
