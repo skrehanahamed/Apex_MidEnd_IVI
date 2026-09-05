@@ -15,6 +15,10 @@
 [![Developer](https://img.shields.io/badge/Developer-Sk%20Rehan%20Ahamed-FF6D00.svg?style=for-the-badge&logo=github)](https://github.com/skrehanahamed)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
+<br/>
+
+<sub>Made with ❤️ by <b>Sk Rehan</b> and with the help of <b>Antigravity</b> and <b>ChatGPT</b></sub>
+
 </div>
 
 ---
@@ -388,6 +392,7 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
 - **Lead Developer**: **Sk Rehan Ahamed** ([@skrehanahamed](https://github.com/skrehanahamed))
 - **Architecture**: Modern C++20, Qt 6.5+, QML, Native AVFoundation
 - **Design Architecture**: Modern 8-inch Display Audio (D-Audio) Cockpit Infotainment System
+- **Acknowledgments**: Made with ❤️ by **Sk Rehan** and with the help of **Antigravity** and **ChatGPT**.
 
 ---
 
