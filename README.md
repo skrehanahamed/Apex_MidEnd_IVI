@@ -317,24 +317,69 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
 
 ---
 
-## Suggested Visual Media for GitHub Showcase
+## 📸 Visual Showcase & Subsystem Tour
 
-To present the project visually on GitHub, you can add screenshots or recordings of the following screens:
+<div align="center">
 
-1. **Dashboard Home**: `docs/screenshots/01_dashboard_home.png`  
-   *The dual-card split view showing active FM broadcast and phone projection widget.*
-2. **Radio Player (Two-Tone)**: `docs/screenshots/02_radio_fm_twotone.png`  
-   *Radio tuner showing cyan **`FM`** / **`AM`** headers, white frequency digits, star favorites, and volume bar.*
-3. **DRVM & Reverse Camera**: `docs/screenshots/03_drvm_parking_camera.png`  
-   *High-resolution 16:9 rear camera feed with active colored distance guidelines and obstacle radar.*
-4. **All Menus Grid**: `docs/screenshots/04_all_menus_carousel.png`  
-   *Automotive 3x4 grid displaying all vehicle applications.*
-5. **Voice Memo Studio**: `docs/screenshots/05_voice_memo_studio.png`  
-   *Live audio recording visualizer with dynamic soundwave feedback and memo playlist.*
-6. **Bluetooth Connections Matrix**: `docs/screenshots/06_bluetooth_devices.png`  
-   *5-device priority management interface with hands-free connection status.*
-7. **OEM Floating Volume Bar**: `docs/screenshots/07_floating_volume_slider.png`  
-   *Bottom floating volume bar displaying the speaker logo, volume digit readout, and slider.*
+### 1. Dual-Card Cockpit Home & Specular Status Chrome
+![Dashboard Home](docs/screenshots/01_dashboard_home.png)
+*Dual-card viewport displaying digital clock & date telemetry alongside the interactive phone projection widget and 4-button OEM bottom dock.*
+
+<br/>
+
+### 2. Live Broadcast Radio & Dynamic Two-Tone Tuner
+![Live Radio Player](docs/screenshots/02_radio_live_tuner.png)
+*Two-tone high-contrast radio tuner with cyan `FM`/`AM` indicator, white frequency typography (`93.5`), live Icecast audio stream metadata, and favorite preset management.*
+
+<br/>
+
+### 3. Floating OEM Volume HUD Overlay
+![Floating Volume Bar](docs/screenshots/03_volume_hud_overlay.png)
+*Auto-dismissing floating volume bar with transparent speaker badge, active media source indicator, and numerical volume level readout (`FM 33`).*
+
+<br/>
+
+### 4. Automotive Application Launcher (All Menus)
+![All Menus Grid](docs/screenshots/04_all_menus_grid.png)
+*High-contrast 3×4 automotive application grid providing quick navigation to all vehicle cockpit subsystems.*
+
+<br/>
+
+### 5. Driving Rear-View Monitor (DRVM) & Parking Assist
+![DRVM Rear Camera](docs/screenshots/05_drvm_parking_camera.png)
+*Photorealistic 16:9 rear-view camera feed with multi-colored parking distance trajectories and ultrasonic obstacle radar sensor fusion.*
+
+<br/>
+
+### 6. Voice Memo Studio & Audio Visualizer
+![Voice Memo Studio](docs/screenshots/06_voice_memo_studio.png)
+*Studio-grade voice recording interface with live waveform audio level meter, recording timer, transport controls, and local playlist.*
+
+<br/>
+
+### 7. Media Source Selection Hub
+![Media Source Selector](docs/screenshots/07_media_source_select.png)
+*Central media hub for switching between broadcast radio (FM/AM), Bluetooth Audio, USB storage, and mobile projections.*
+
+<br/>
+
+### 8. Bluetooth Device Manager & Priority Matrix
+![Bluetooth Connections](docs/screenshots/08_bluetooth_manager.png)
+*5-device pairing matrix with interactive step-by-step visual pairing guide and independent Hands-Free Phone / Audio profile routing.*
+
+<br/>
+
+### 9. Acoustic Sound Staging & Spatial Position
+![Sound Settings Position](docs/screenshots/09_sound_settings_position.png)
+*Interactive 3D vehicle cabin sound staging with directional reticle for fader and balance acoustic alignment.*
+
+<br/>
+
+### 10. System Version & OTA Update Information
+![System Version Info](docs/screenshots/10_system_version_info.png)
+*Automotive specification dashboard showing Model code, Software version, Firmware version, and the active Apex Release Version (`v1.0.0`).*
+
+</div>
 
 ---
 
