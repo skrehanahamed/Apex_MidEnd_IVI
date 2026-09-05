@@ -10,7 +10,7 @@
 [![Standard](https://img.shields.io/badge/Standard-ISO%2026262%20%7C%20MISRA%20C%2B%2B-00599C.svg?style=for-the-badge&logo=c%2B%2B&logoColor=white)](https://isocpp.org/)
 [![Version](https://img.shields.io/badge/Version-v1.0.0-007ACC.svg?style=for-the-badge&logo=semver)](CMakeLists.txt)
 [![macOS CI](https://img.shields.io/badge/macOS%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=apple)](.github/workflows/build-macos.yml)
-[![Ubuntu CI](https://img.shields.io/badge/Ubuntu%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=ubuntu)](.github/workflows/build-ubuntu.yml)
+[![Ubuntu CI](https://img.shields.io/badge/Ubuntu%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=ubuntu)](.github/workflows/build.yml)
 [![Windows CI](https://img.shields.io/badge/Windows%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=windows)](.github/workflows/build-windows.yml)
 [![Developer](https://img.shields.io/badge/Developer-Sk%20Rehan%20Ahamed-FF6D00.svg?style=for-the-badge&logo=github)](https://github.com/skrehanahamed)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
@@ -185,7 +185,7 @@ Apex_IVI/
 ├── .github/
 │   └── workflows/
 │       ├── build-macos.yml          # GitHub Actions CI for macOS (Clang / Homebrew Qt 6)
-│       └── build-ubuntu.yml         # GitHub Actions CI for Ubuntu Linux (GCC / APT Qt 6)
+│       └── build.yml         # GitHub Actions CI for Ubuntu Linux (GCC / APT Qt 6)
 ├── assets/
 │   ├── apps/                        # High-resolution application vector icons
 │   ├── bluetooth/                   # Bluetooth audio, device pairing guides & icons
@@ -285,7 +285,7 @@ The repository provides automated CI workflows across **three major desktop and 
 | Platform | Workflow File | Runner | Toolchain | Verification |
 | :--- | :--- | :--- | :--- | :--- |
 | **macOS** | [`.github/workflows/build-macos.yml`](.github/workflows/build-macos.yml) | `macos-latest` | Apple Clang, Qt 6, Ninja | Native binary compilation & AVFoundation framework link |
-| **Ubuntu Linux** | [`.github/workflows/build-ubuntu.yml`](.github/workflows/build-ubuntu.yml) | `ubuntu-22.04` | GCC, Qt 6, Ninja, ALSA / Pulse | Cross-platform audio fallback & QtQuick binary link |
+| **Ubuntu Linux** | [`.github/workflows/build.yml`](.github/workflows/build.yml) | `ubuntu-22.04` | GCC, Qt 6, Ninja, ALSA / Pulse | Cross-platform audio fallback & QtQuick binary link |
 | **Windows** | [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) | `windows-2022` | MSVC 2019/2022, Qt 6.6.3 MSVC, Ninja | PE executable generation (`ApexIVI.exe`) |
 
 Workflows automatically trigger on:

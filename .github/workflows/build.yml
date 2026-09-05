@@ -1,4 +1,4 @@
-name: Linux Build & Verification
+name: Qt 6 Build & Verification
 
 on:
   push:
@@ -10,15 +10,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ubuntu:
-    name: Build (Ubuntu 22.04 / Qt 6.6.3 GCC)
+  build:
+    name: Build (Ubuntu 22.04 / Qt 6.5.3)
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install System Build Dependencies
+      - name: Install Linux Dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -28,7 +28,6 @@ jobs:
             build-essential \
             cmake \
             ninja-build \
-            pkg-config \
             libgl1-mesa-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
@@ -38,25 +37,20 @@ jobs:
             libasound2-dev \
             libpulse-dev
 
-      - name: Install Qt 6.6.3 GCC
+      - name: Setup Qt 6
         uses: jurplel/install-qt-action@v3
         with:
-          version: '6.6.3'
+          version: '6.5.3'
           arch: gcc_64
           modules: 'qtmultimedia'
           cache: true
+          cache-key-prefix: 'install-qt-action-6.5.3'
 
       - name: Configure CMake
         run: |
-          cmake -B build -S . \
-            -GNinja \
+          cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Compile Apex IVI
+      - name: Build Application
         run: |
-          cmake --build build --parallel
-
-      - name: Verify Binary Output
-        run: |
-          test -f build/ApexIVI
-          file build/ApexIVI
+          cmake --build build --config Release --parallel

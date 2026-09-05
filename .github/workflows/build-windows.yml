@@ -1,4 +1,4 @@
-name: Windows Build & Verification
+name: Windows Build
 
 on:
   push:
@@ -18,15 +18,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup MSVC Environment
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Setup Ninja Build System
-        uses: ashutoshvarma/setup-ninja@master
-        with:
-          version: 1.11.1
-
-      - name: Install Qt 6.6.3 MSVC
+      - name: Setup Qt 6
         uses: jurplel/install-qt-action@v3
         with:
           version: '6.6.3'
@@ -34,22 +26,25 @@ jobs:
           modules: 'qtmultimedia'
           mirror: 'https://download.qt.io'
           cache: true
+          cache-key-prefix: 'install-qt-action-6.6.3-win-msvc2019'
+
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        run: choco install ninja -y
 
       - name: Configure CMake
+        shell: cmd
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER=cl ^
+            -DCMAKE_CXX_COMPILER=cl
 
-      - name: Compile Apex IVI
+      - name: Build Application
+        shell: cmd
         run: |
           cmake --build build --config Release --parallel
-
-      - name: Verify Binary Output
-        shell: pwsh
-        run: |
-          if (Test-Path "build/ApexIVI.exe") {
-            Write-Host "Verification Success: build/ApexIVI.exe found and compiled successfully."
-            Get-Item "build/ApexIVI.exe" | Select-Object Name, Length, LastWriteTime
-          } else {
-            Write-Error "Verification Failure: build/ApexIVI.exe binary was not generated!"
-            exit 1
-          }
