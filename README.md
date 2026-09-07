@@ -1,4 +1,4 @@
-# Apex IVI - Automotive In-Vehicle Infotainment System
+# Apex MID end IVI - Automotive In-Vehicle Infotainment System
 
 <div align="center">
 
