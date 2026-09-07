@@ -1,4 +1,4 @@
-# Apex MID end IVI - Automotive In-Vehicle Infotainment System
+# Apex HORIZON IVI - Automotive In-Vehicle Infotainment System
 
 <div align="center">
 
