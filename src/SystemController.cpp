@@ -171,7 +171,9 @@ SystemController::SystemController(QObject *parent)
     m_player = new QMediaPlayer(this);
     m_audioOutput = new QAudioOutput(this);
     m_player->setAudioOutput(m_audioOutput);
-    m_audioOutput->setVolume(0.75f);
+    // Initial volume matching default level 29 out of 45 with perceptual curve
+    float initialNorm = 29.0f / 45.0f;
+    m_audioOutput->setVolume(std::clamp(initialNorm * 0.30f + std::pow(initialNorm, 0.70f) * 0.70f, 0.0f, 1.0f));
 
     connect(m_player, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
         bool playing = (state == QMediaPlayer::PlayingState);
@@ -186,21 +188,27 @@ SystemController::SystemController(QObject *parent)
         emit radioLoadingChanged();
     });
 
-    // Populate Real Authentic Indian FM & AM Radio Stations (Matching Genuine Photos 1 & 2)
+    // Debounce timer for zero-lag channel switching and dial scrubbing
+    m_radioTuneTimer = new QTimer(this);
+    m_radioTuneTimer->setSingleShot(true);
+    m_radioTuneTimer->setInterval(120);
+    connect(m_radioTuneTimer, &QTimer::timeout, this, &SystemController::startRadioStream);
+
+    // Populate Real Authentic Indian FM & AM Radio Stations (High-Speed Direct MP3 Streams)
     QVariantMap s1;
     s1["frequency"] = "90.4";
-    s1["name"] = "Salem Info";
+    s1["name"] = "Radio Udaan";
     s1["rdsInfo"] = "Community Radio 90.4 - Local Info & Folk Music";
-    s1["streamUrl"] = "https://stream.zeno.fm/6n6ewddtad0uv";
+    s1["streamUrl"] = "https://stream.radioudaan.com/listen/radio_udaan/radio.mp3";
     s1["band"] = "FM";
     s1["isFavorite"] = true;
     m_stationList.append(s1);
 
     QVariantMap s2;
     s2["frequency"] = "91.9";
-    s2["name"] = "N - JAIL";
-    s2["rdsInfo"] = "Radiocity91.9";
-    s2["streamUrl"] = "https://eu8.fastcast4u.com/proxy/clyedupq/stream";
+    s2["name"] = "Desi Zone 90s";
+    s2["rdsInfo"] = "Desi Zone - 90s Retro Bollywood & Indipop";
+    s2["streamUrl"] = "https://www.desizoneradio.com/relay3";
     s2["band"] = "FM";
     s2["isFavorite"] = true;
     m_stationList.append(s2);
@@ -227,7 +235,7 @@ SystemController::SystemController(QObject *parent)
     s5["frequency"] = "100.5";
     s5["name"] = "AIR FM Gold";
     s5["rdsInfo"] = "Hindi Ghazals & Daily National News";
-    s5["streamUrl"] = "https://stream.zeno.fm/n2fd0edh9k8uv";
+    s5["streamUrl"] = "https://azuracast.vibesounds.in:8010/radio.mp3";
     s5["band"] = "FM";
     s5["isFavorite"] = true;
     m_stationList.append(s5);
@@ -236,7 +244,7 @@ SystemController::SystemController(QObject *parent)
     s6["frequency"] = "104.8";
     s6["name"] = "Ishq FM";
     s6["rdsInfo"] = "Do Dil Mil Rahe Hain - Kumar Sanu";
-    s6["streamUrl"] = "http://stream.zeno.fm/8ty8szwpwfeuv";
+    s6["streamUrl"] = "https://funasia.streamguys1.com/live9";
     s6["band"] = "FM";
     s6["isFavorite"] = false;
     m_stationList.append(s6);
@@ -245,7 +253,7 @@ SystemController::SystemController(QObject *parent)
     s7["frequency"] = "106.4";
     s7["name"] = "Radio City Hindi";
     s7["rdsInfo"] = "Pehla Nasha - Jo Jeeta Wohi Sikandar";
-    s7["streamUrl"] = "http://stream.zeno.fm/8ty8szwpwfeuv";
+    s7["streamUrl"] = "https://s7.everestcast.com:1155/stream";
     s7["band"] = "FM";
     s7["isFavorite"] = false;
     m_stationList.append(s7);
@@ -253,8 +261,8 @@ SystemController::SystemController(QObject *parent)
     QVariantMap s8;
     s8["frequency"] = "657";
     s8["name"] = "AIR National AM";
-    s8["rdsInfo"] = "National News Bulletin - All India Radio";
-    s8["streamUrl"] = "https://air.pc.cdn.bitgravity.com/air/live/pbaudio001/playlist.m3u8";
+    s8["rdsInfo"] = "Golden Era Classics - All India Radio";
+    s8["streamUrl"] = "http://dard.out.airtime.pro:8000/dard_a";
     s8["band"] = "AM";
     s8["isFavorite"] = true;
     m_stationList.append(s8);
@@ -262,8 +270,8 @@ SystemController::SystemController(QObject *parent)
     QVariantMap s9;
     s9["frequency"] = "810";
     s9["name"] = "AIR Vividh Bharati";
-    s9["rdsInfo"] = "Vividh Bharati AM - Sangeet Sarita";
-    s9["streamUrl"] = "https://airhlspush.pc.cdn.bitgravity.com/httppush/hlspbaudio005/hlspbaudio00564kbps.m3u8";
+    s9["rdsInfo"] = "Vividh Bharati AM - Sangeet Sarita & Melodies";
+    s9["streamUrl"] = "http://millenniumhits.out.airtime.pro:8000/millenniumhits_a";
     s9["band"] = "AM";
     s9["isFavorite"] = false;
     m_stationList.append(s9);
@@ -430,36 +438,28 @@ void SystemController::toggleRadioBand()
     }
 }
 
-void SystemController::playCurrentStation()
+void SystemController::startRadioStream()
 {
     if (m_stationList.isEmpty() || m_currentStationIndex < 0 || m_currentStationIndex >= m_stationList.size()) return;
     QVariantMap cur = m_stationList[m_currentStationIndex].toMap();
     QString urlStr = cur["streamUrl"].toString();
-    m_radioStation = cur["frequency"].toString();
-    m_currentStationName = cur["name"].toString();
-    m_currentRdsInfo = cur["rdsInfo"].toString();
-    m_isStationFavorited = cur["isFavorite"].toBool();
-    m_radioBand = cur["band"].toString();
-    emit radioStationChanged();
-    emit currentStationNameChanged();
-    emit currentRdsInfoChanged();
-    emit isStationFavoritedChanged();
-    emit radioBandChanged();
-
-    if (m_selectedMediaSource != m_radioBand.toLower()) {
-        m_selectedMediaSource = m_radioBand.toLower();
-        emit selectedMediaSourceChanged();
-    }
 
     if (!urlStr.isEmpty() && m_player) {
         m_radioLoading = true;
         emit radioLoadingChanged();
+        m_player->stop();
         m_player->setSource(QUrl(urlStr));
         m_player->play();
         m_radioPlaying = true;
         emit radioStateChanged();
         qDebug() << "[Apex IVI Radio] Streaming live station:" << m_radioStation << m_currentStationName << "URL:" << urlStr;
     }
+}
+
+void SystemController::playCurrentStation()
+{
+    if (m_stationList.isEmpty() || m_currentStationIndex < 0 || m_currentStationIndex >= m_stationList.size()) return;
+    selectStation(m_currentStationIndex);
 }
 
 void SystemController::pauseRadio()
@@ -517,7 +517,31 @@ void SystemController::selectStation(int index)
     if (index >= 0 && index < m_stationList.size()) {
         m_currentStationIndex = index;
         emit currentStationIndexChanged();
-        playCurrentStation();
+
+        QVariantMap cur = m_stationList[m_currentStationIndex].toMap();
+        m_radioStation = cur["frequency"].toString();
+        m_currentStationName = cur["name"].toString();
+        m_currentRdsInfo = cur["rdsInfo"].toString();
+        m_isStationFavorited = cur["isFavorite"].toBool();
+        m_radioBand = cur["band"].toString();
+
+        emit radioStationChanged();
+        emit currentStationNameChanged();
+        emit currentRdsInfoChanged();
+        emit isStationFavoritedChanged();
+        emit radioBandChanged();
+
+        if (m_selectedMediaSource != m_radioBand.toLower()) {
+            m_selectedMediaSource = m_radioBand.toLower();
+            emit selectedMediaSourceChanged();
+        }
+
+        m_radioLoading = true;
+        emit radioLoadingChanged();
+
+        if (m_radioTuneTimer) {
+            m_radioTuneTimer->start(120);
+        }
     }
 }
 
@@ -983,7 +1007,11 @@ void SystemController::setQuietModeEnabled(bool enabled)
             qDebug() << "[Apex IVI] Quiet mode enabled: Audio focused on front seats, volume limited. Saved fader:" << m_savedFaderBeforeQuietMode;
         } else {
             m_fader = m_savedFaderBeforeQuietMode;
-            if (m_audioOutput) m_audioOutput->setVolume(0.75f);
+            if (m_audioOutput) {
+                float norm = static_cast<float>(m_volume) / 45.0f;
+                float gain = std::clamp(norm * 0.30f + std::pow(norm, 0.70f) * 0.70f, 0.0f, 1.0f);
+                m_audioOutput->setVolume(gain);
+            }
             qDebug() << "[Apex IVI] Quiet mode disabled: Audio staging restored to fader:" << m_fader;
         }
         emit quietModeChanged();
@@ -1994,7 +2022,9 @@ void SystemController::setVolume(int v)
     if (m_volume != clamped) {
         m_volume = clamped;
         if (m_audioOutput) {
-            m_audioOutput->setVolume(static_cast<float>(m_volume) / 45.0f);
+            float norm = static_cast<float>(m_volume) / 45.0f;
+            float gain = std::clamp(norm * 0.30f + std::pow(norm, 0.70f) * 0.70f, 0.0f, 1.0f);
+            m_audioOutput->setVolume(gain);
         }
         qDebug() << "[Apex IVI] Master volume adjusted to:" << m_volume;
         emit volumeChanged();

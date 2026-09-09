@@ -456,6 +456,7 @@ signals:
 private slots:
     void updateDateTime();
     void onInactivityTimeout();
+    void startRadioStream();
 
 private:
     void saveBluetoothDeviceList();
@@ -550,6 +551,7 @@ private:
     QString m_selectedProjectionDevice{"Android Auto"};
     QTimer *m_timer{nullptr};
     QTimer *m_inactivityTimer{nullptr};
+    QTimer *m_radioTuneTimer{nullptr};
     QMediaPlayer *m_player{nullptr};
     QAudioOutput *m_audioOutput{nullptr};
     QString m_selectedMediaSource{"none"};
