@@ -122,7 +122,9 @@ flowchart TB
 
 ### `SYS-03` AM / FM Broadcast Radio Engine & Live Audio Streaming
 - **Two-Tone Frequency Display**: Genuine automotive styling where the band indicator (**`FM`** / **`AM`**) is illuminated in vivid cyan-blue (`#38B6FF`) while station frequency digits (`93.5`, `98.3`, `102.9`) remain crisp white (`#FFFFFF`).
-- **Live Internet Stream Integration**: C++ `QMediaPlayer` backend natively streams live audio broadcasts (e.g. Radio Mirchi 98.3, AIR National AM 657, Suryan FM 93.5) with automatic fallback buffering.
+- **PipeWire Sink Integration**: Background GStreamer audio pipeline uses `bin.( audioconvert ! audioresample ! pipewiresink )`, completely eliminating ALSA device lockouts and enabling clean coexistence with Bluetooth A2DP audio.
+- **Dynamic Station List Server**: Fetches station catalogs from local `/etc/apex-ivi/radio_stations.json` or HTTP streaming server (`http://127.0.0.1:8088/radio/stations.json`) with persistent cache fallback.
+- **Direct Navigation & Auto-Start**: Tapping the FM/AM icon from Home or Bottom Dock always opens the FM/AM screen, smoothly pausing active Bluetooth music to start the radio.
 - **Automotive Tuning Controls**:
   - `Seek Down (◀)` & `Seek Up (▶)` with tap-to-step and press-and-hold frequency rolling sweep.
   - One-touch favorite star (`★`) button with persistent memory saving.
@@ -142,23 +144,32 @@ flowchart TB
 - **Dynamic Soundwave Amplitude Visualizer**: Live multi-bar audio wave reactive to incoming voice levels.
 - **Complete Studio Controls**: Start, pause, resume, stop, time-elapsed timer, audio file playback with scrubbable waveform slider, and recording deletion.
 
-### `SYS-06` Bluetooth Telephony & Media Projection Suite
-- **5-Device Priority Matrix**: Dedicated device connection manager with auto-pairing sequence, connection priority reordering, and disconnect toggles.
-- **Hands-Free Phone System**:
-  - Dialpad with rapid number entry, auto-formatting, and backspace.
-  - Call History list with incoming, outgoing, and missed call flags.
-  - Phonebook contacts directory with search and one-touch calling.
-  - Active call screen with mute, hold, keypad toggle, and hands-free device handover.
-- **Phone Projection**: Integrated configuration suite for Apple CarPlay and Android Auto device connections.
+### `SYS-06` Bluetooth Audio Hub & Modern Media Card
+- **High-Fidelity Wireless Audio (A2DP AAC / SBC)**: Native PipeWire and WirePlumber sink integration streaming CD-quality wireless music directly to the vehicle's HDMI speakers.
+- **Microsecond D-Bus Control**: Completely asynchronous `QDBusConnection` calls to `org.bluez.MediaPlayer1` for zero-latency Play/Pause, Next Track, Previous Track, Shuffle, and Repeat.
+- **Live Metadata & Dynamic Album Art**: Displays real-time song title, artist, album, live playback progress, and auto-fetches high-resolution cover artwork.
+- **Centered Home Screen Player**: The main screen Bluetooth card mirrors the FM aesthetic with large centered typography (`44px` title, `25px` artist), illuminated ambient backdrop, and a balanced 5-button transport cluster.
 
-### `SYS-07` Vehicle & Infotainment Settings Suite
+### `SYS-07` Hands-Free Telephony, PBAP Phonebook & Live Call HUD
+- **Deterministic Audio Priority Hierarchy ("One at a Time")**:
+  1. **Priority 1 (Absolute Highest)**: **Phone Calls (HFP)** — auto-silences and blocks all media while a call is active.
+  2. **Priority 2**: **Bluetooth Music (A2DP)** — starting music immediately halts FM/AM radio.
+  3. **Priority 3**: **FM/AM Radio** — starting radio immediately pauses Bluetooth music.
+- **PBAP Contacts & Call History Synchronizer**: Asynchronous D-Bus PBAP 1.1 / Legacy profile engine parses phonebooks and caches the 25 newest call history records (Incoming, Outgoing, Missed).
+- **Real-Time Telemetry**: Live AT+CIND and BlueZ Battery1 polling displaying cellular signal strength (0–5 bars) and phone battery percentage.
+- **OEM In-Call Display & Dialpad Drawer**:
+  - Prominent 140px glowing caller avatar badge with breathing animation during dialing.
+  - Pixel-perfect button alignment: `Use Private`, `End`, and the right sidebar's `Keypad` button share the exact same horizontal baseline.
+  - Slide-out in-call DTMF dialpad drawer with live digits buffer and backspace.
+
+### `SYS-08` Vehicle & Infotainment Settings Suite
 - **Sound Settings**: 7-band parametric equalizer, front/rear fader & balance positioning, speed-dependent volume compensation (SDVC), and system chime toggles.
 - **Display Settings**: Backlight brightness slider, automatic night mode dimming, and analog clock face selector for standby mode.
 - **Quiet Mode**: Mutes rear speakers and limits front speaker volume to level 7 for sleeping rear occupants.
 - **Button Settings**: Customizable steering wheel mode button toggles and shortcut key customization.
 - **General Settings**: System software version, memory allocation, date/time formatting, and factory data reset.
 
-### `SYS-08` Master Volume Audio Engine & OEM Floating Slider Bar
+### `SYS-09` Master Volume Audio Engine & OEM Floating Slider Bar
 - **Hardware Rotary Knob Emulation**: Smooth master volume stepping (0 to 45) controlled globally via physical **Up Arrow** and **Down Arrow** keys.
 - **Auto-Dismiss Floating Bottom Bar**:
   - Floats smoothly into view on volume adjustment.
