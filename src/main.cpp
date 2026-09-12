@@ -14,6 +14,7 @@
 #include <QFont>
 #include <QIcon>
 #include <QEvent>
+#include <QKeyEvent>
 #include <cstdio>
 #include <cstdlib>
 #include "SystemController.hpp"
@@ -65,10 +66,21 @@ protected:
         switch (event->type()) {
         case QEvent::MouseButtonPress:
         case QEvent::TouchBegin:
-        case QEvent::KeyPress:
-            // Wake screensaver if active, or restart 20s inactivity countdown
             m_controller->reportActivity();
             break;
+
+        case QEvent::KeyPress: {
+            m_controller->reportActivity();
+            QKeyEvent *ke = static_cast<QKeyEvent *>(event);
+            if (ke->key() == Qt::Key_Up) {
+                m_controller->increaseVolume();
+                return true;
+            } else if (ke->key() == Qt::Key_Down) {
+                m_controller->decreaseVolume();
+                return true;
+            }
+            break;
+        }
 
         case QEvent::MouseMove:
         case QEvent::MouseButtonRelease:

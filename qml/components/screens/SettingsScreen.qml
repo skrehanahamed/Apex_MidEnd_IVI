@@ -373,21 +373,6 @@ Rectangle {
                     width: 58
                     height: 56
 
-                    // Soft Light Blue Pressed Glow
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 84
-                        height: 84
-                        radius: 42
-                        color: "#4DC3FF"
-                        opacity: soundMouse.pressed ? 0.55 : 0.0
-                        scale: soundMouse.pressed ? 1.15 : 0.6
-                        border.color: "#99E5FF"
-                        border.width: soundMouse.pressed ? 1.5 : 0
-
-                        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                    }
 
                     Image {
                         anchors.fill: parent
@@ -448,21 +433,6 @@ Rectangle {
                     width: 76
                     height: 58
 
-                    // Soft Light Blue Pressed Glow
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 96
-                        height: 84
-                        radius: 42
-                        color: "#4DC3FF"
-                        opacity: devConnMouse.pressed ? 0.55 : 0.0
-                        scale: devConnMouse.pressed ? 1.15 : 0.6
-                        border.color: "#99E5FF"
-                        border.width: devConnMouse.pressed ? 1.5 : 0
-
-                        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                    }
 
                     Image {
                         anchors.fill: parent
@@ -524,21 +494,6 @@ Rectangle {
                     width: 66
                     height: 58
 
-                    // Soft Light Blue Pressed Glow
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 88
-                        height: 84
-                        radius: 42
-                        color: "#4DC3FF"
-                        opacity: dispMouse.pressed ? 0.55 : 0.0
-                        scale: dispMouse.pressed ? 1.15 : 0.6
-                        border.color: "#99E5FF"
-                        border.width: dispMouse.pressed ? 1.5 : 0
-
-                        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                    }
 
                     Image {
                         anchors.fill: parent
@@ -599,21 +554,6 @@ Rectangle {
                     width: 58
                     height: 58
 
-                    // Soft Light Blue Pressed Glow
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 84
-                        height: 84
-                        radius: 42
-                        color: "#4DC3FF"
-                        opacity: btnMouseArea.pressed ? 0.55 : 0.0
-                        scale: btnMouseArea.pressed ? 1.15 : 0.6
-                        border.color: "#99E5FF"
-                        border.width: btnMouseArea.pressed ? 1.5 : 0
-
-                        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                    }
 
                     Image {
                         anchors.fill: parent
@@ -674,21 +614,6 @@ Rectangle {
                     width: 66
                     height: 58
 
-                    // Soft Light Blue Pressed Glow
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 88
-                        height: 84
-                        radius: 42
-                        color: "#4DC3FF"
-                        opacity: genMouse.pressed ? 0.55 : 0.0
-                        scale: genMouse.pressed ? 1.15 : 0.6
-                        border.color: "#99E5FF"
-                        border.width: genMouse.pressed ? 1.5 : 0
-
-                        Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                        Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                    }
 
                     Image {
                         anchors.fill: parent

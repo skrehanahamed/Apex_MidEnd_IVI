@@ -51,7 +51,7 @@ Item {
             id: leftCard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: leftMouse.pressed ? "#0B0E14" : "#05070B"
+            color: leftMouse.pressed ? "#141D2C" : "#0D1624"
 
             Behavior on color { ColorAnimation { duration: 100 } }
 
@@ -103,7 +103,13 @@ Item {
                 id: leftRadioCard
                 side: "left"
                 visible: systemController.leftWidget === "radio_media"
-                onRadioClicked: root.radioClicked()
+                onRadioClicked: {
+                    if (systemController.selectedMediaSource === "bluetooth") {
+                        systemController.navigateTo("bluetooth_audio")
+                    } else {
+                        root.radioClicked()
+                    }
+                }
                 z: 10
             }
 
@@ -219,7 +225,7 @@ Item {
             id: rightCard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: rightMouse.pressed ? "#0B0E14" : "#05070B"
+            color: rightMouse.pressed ? "#141D2C" : "#0D1624"
 
             Behavior on color { ColorAnimation { duration: 100 } }
 
@@ -298,7 +304,13 @@ Item {
                 id: rightRadioCard
                 side: "right"
                 visible: systemController.rightWidget === "radio_media"
-                onRadioClicked: root.radioClicked()
+                onRadioClicked: {
+                    if (systemController.selectedMediaSource === "bluetooth") {
+                        systemController.navigateTo("bluetooth_audio")
+                    } else {
+                        root.radioClicked()
+                    }
+                }
                 z: 10
             }
 
@@ -376,9 +388,34 @@ Item {
     component RadioMediaCardView: Item {
         id: cardViewRoot
         anchors.fill: parent
+        clip: true
         property string side: "left"
         property bool bodyPressed: cardBodyMouse.pressed
         signal radioClicked()
+
+        // Background scenic artwork with clear illumination for main screen media widget
+        Image {
+            anchors.fill: parent
+            source: systemController.currentScenicBlurBackground
+            fillMode: Image.PreserveAspectCrop
+            smooth: true
+            asynchronous: true
+            opacity: 0.52
+            visible: (systemController.selectedMediaSource !== "none")
+            z: 0
+        }
+
+        // Ambient soft illumination overlay
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.rgba(0.08, 0.16, 0.26, 0.32) }
+                GradientStop { position: 0.6; color: Qt.rgba(0.04, 0.09, 0.16, 0.22) }
+                GradientStop { position: 1.0; color: Qt.rgba(0.02, 0.05, 0.10, 0.42) }
+            }
+            visible: (systemController.selectedMediaSource !== "none")
+            z: 1
+        }
 
         // Card body tap area: covers the card EXCEPT the bottom presetRow buttons
         MouseArea {
@@ -624,24 +661,27 @@ Item {
             }
         }
 
-        // 2. When Media is USB or Bluetooth
+        // 2. When Media is USB or Bluetooth (Matching Reference Photo)
         Item {
             anchors.fill: parent
             visible: (systemController.selectedMediaSource === "usb" || systemController.selectedMediaSource === "bluetooth")
 
+            // Top: "USB Music" or "Bluetooth Audio"
             Text {
                 id: mediaTitleText
                 anchors.top: parent.top
                 anchors.topMargin: 36
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: (systemController.selectedMediaSource === "usb") ? "USB Music" : "Bluetooth Audio"
-                color: "#BAC7D5"
+                color: "#38B6FF"
                 font.pixelSize: 24
                 font.weight: Font.Bold
                 font.family: "Roboto"
             }
 
+            // Hairline separator
             Rectangle {
+                id: mediaDividerLine
                 anchors.top: mediaTitleText.bottom
                 anchors.topMargin: 16
                 anchors.left: parent.left
@@ -652,23 +692,232 @@ Item {
                 color: "#1E2A38"
             }
 
+            // Middle: Giant Track Title + Artist Info (Centered like FM part)
             Column {
-                anchors.centerIn: parent
-                spacing: 14
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: mediaDividerLine.bottom
+                anchors.bottom: mediaControlsRow.top
+                anchors.topMargin: 24
+                width: parent.width - 48
+                spacing: 10
+
+                // Large prominent Track Title: "Hymn for the Weekend"
                 Text {
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: (systemController.selectedMediaSource === "usb") ? "No USB Device" : (systemController.hasHandsFreeDevice ? systemController.activeHandsFreeDeviceName : "Connected Device")
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: (systemController.selectedMediaSource === "bluetooth")
+                          ? (systemController.bluetoothTrackTitle.length > 0 ? systemController.bluetoothTrackTitle : "Bluetooth Audio")
+                          : (systemController.selectedMediaSource === "usb" ? "sample4 mp3.mp3" : "Radio / Media")
                     color: "#FFFFFF"
-                    font.pixelSize: 32
+                    font.pixelSize: 44
+                    font.weight: Font.Bold
+                    font.family: "Roboto"
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                }
+
+                // Station RDS / Artist name: "Coldplay"
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                    text: systemController.bluetoothTrackArtist || ((systemController.bluetoothConnectedDeviceName && systemController.bluetoothConnectedDeviceName.length > 0) ? systemController.bluetoothConnectedDeviceName : "No artist information")
+                    color: "#DCE7F5"
+                    font.pixelSize: 25
                     font.weight: Font.DemiBold
                     font.family: "Roboto"
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
                 }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: (systemController.selectedMediaSource === "usb") ? "Insert USB to play media" : "Ready for audio playback"
-                    color: "#7B92AB"
-                    font.pixelSize: 18
-                    font.family: "Roboto"
+            }
+
+            // 5 Playback Control Buttons: [ 🔁 ]   [ |<< ]   [ || / ▶ ]   [ >>| ]   [ 🔀 ]
+            Row {
+                id: mediaControlsRow
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: mediaProgressBarItem.top
+                anchors.bottomMargin: 18
+                spacing: 24
+
+                // 1. Repeat Button
+                Rectangle {
+                    width: 44
+                    height: 44
+                    radius: 22
+                    color: (systemController.bluetoothRepeatMode !== "off") ? "#183B60" : "transparent"
+                    border.color: (systemController.bluetoothRepeatMode !== "off") ? "#38B6FF" : "transparent"
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "🔁"
+                        font.pixelSize: 20
+                        scale: rptMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: rptMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.toggleBluetoothRepeat()
+                    }
+                }
+
+                // 2. Previous Track [ |<< ]
+                Rectangle {
+                    width: 44
+                    height: 44
+                    radius: 22
+                    color: prevTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "|◀◀"
+                        color: prevTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
+                        font.pixelSize: 22
+                        scale: prevTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: prevTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.bluetoothMediaPrevious()
+                    }
+                }
+
+                // 3. Play / Pause [ || / ▶ ]
+                Rectangle {
+                    width: 48
+                    height: 48
+                    radius: 24
+                    color: playTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: (systemController.bluetoothPlaybackStatus === "playing") ? "❚❚" : "▶"
+                        color: playTrackMouse.pressed ? "#70D6FF" : "#FFFFFF"
+                        font.pixelSize: 26
+                        scale: playTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: playTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.toggleBluetoothMediaPlayback()
+                    }
+                }
+
+                // 4. Next Track [ >>| ]
+                Rectangle {
+                    width: 44
+                    height: 44
+                    radius: 22
+                    color: nextTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▶▶|"
+                        color: nextTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
+                        font.pixelSize: 22
+                        scale: nextTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: nextTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.bluetoothMediaNext()
+                    }
+                }
+
+                // 5. Shuffle Button [ 🔀 ]
+                Rectangle {
+                    width: 44
+                    height: 44
+                    radius: 22
+                    color: systemController.bluetoothShuffleMode ? "#183B60" : "transparent"
+                    border.color: systemController.bluetoothShuffleMode ? "#38B6FF" : "transparent"
+                    border.width: 1
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "🔀"
+                        font.pixelSize: 20
+                        scale: shufMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: shufMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.toggleBluetoothShuffle()
+                    }
+                }
+            }
+
+            // Live Progress Bar (Elapsed 1:01 | Blue Bar | Duration 4:04)
+            Item {
+                id: mediaProgressBarItem
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 16
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                height: 24
+
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Text {
+                        text: systemController.bluetoothTrackPositionStr
+                        color: "#BAC7D5"
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                        height: 6
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 3
+                            color: "#162232"
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: Math.max(0, Math.min(parent.width, parent.width * (systemController.bluetoothTrackPositionMs / Math.max(1, systemController.bluetoothTrackDurationMs))))
+                                radius: 3
+                                color: "#0084FF"
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: systemController.bluetoothTrackDurationStr
+                        color: "#BAC7D5"
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
                 }
             }
         }

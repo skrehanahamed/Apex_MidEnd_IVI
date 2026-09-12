@@ -453,7 +453,7 @@ Rectangle {
                             id: candRadio
                             iconId: "radio"
                             iconSrc: "qrc:/assets/apps/icon_all_radio.png"
-                            title: "Radio"
+                            title: "FM/AM"
                         }
 
                         // Row 2
@@ -1130,7 +1130,7 @@ Rectangle {
             case "settings": return "Settings"
             case "projection": return "Projection"
             case "voicememo": return "Voice memo"
-            case "radio": return "Radio"
+            case "radio": return "FM/AM"
             case "drvm": return "DRVM"
             case "quietmode": return "Quiet mode"
             case "manual": return "Manual"

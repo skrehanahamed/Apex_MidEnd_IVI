@@ -20,10 +20,21 @@ Rectangle {
     // Screen State
     property string currentView: "list" // "list" | "add_new"
     property int currentStep: 1        // 1 to 5 for Add New tutorial
-    property var deviceNamesPool: ["Galaxy S24 Ultra", "OnePlus 12", "iPhone 16 Pro", "Pixel 9 Pro", "Nothing Phone (2)"]
-    property int poolIndex: 0
-    property string pendingDeviceName: deviceNamesPool[poolIndex]
     property string returnScreenAfterAdd: "list"
+
+    onCurrentViewChanged: {
+        var isDiscoverable = (currentView === "add_new")
+        console.log("[Bluetooth] Screen view changed:", currentView, "-> Discoverable:", isDiscoverable)
+        systemController.setBluetoothDiscoverable(isDiscoverable)
+    }
+
+    Component.onCompleted: {
+        systemController.setBluetoothDiscoverable(root.currentView === "add_new")
+    }
+
+    Component.onDestruction: {
+        systemController.setBluetoothDiscoverable(false)
+    }
 
     // Preferences Dialog State (Photo 1788551459783)
     property bool showPreferencesModal: false
@@ -31,15 +42,148 @@ Rectangle {
     property string prefTargetName: ""
     property bool prefHandsFree: true
     property bool prefAudio: true
-    property bool prefIsAddingNew: false
+
+    // Passkey Authentication Waiting Modal State (Add new device prompt)
+    property bool showPasskeyAuthModal: false
+    property string passkeyAuthDeviceName: ""
+    property string passkeyAuthCode: ""
+
+    // Connecting Mobile Device Modal State (Photo 2)
+    property bool showConnectingModal: false
+    property string connectingDeviceName: ""
+
+    // Connected Notification Modal State (Photo 1)
+    property bool showConnectedModal: false
+    property string connectedDeviceName: ""
+
+    // Connecting animation -> Connected modal transition timer (Photo 2 to Photo 1)
+    Timer {
+        id: connectingTransitionTimer
+        interval: 2200
+        repeat: false
+        onTriggered: {
+            console.log("[Bluetooth] Connecting animation finished, showing connected modal")
+            root.showConnectingModal = false
+            root.showConnectedModal = true
+            connectedNoticeTimer.restart()
+            root.currentView = "list"
+        }
+    }
+
+    Timer {
+        id: connectedNoticeTimer
+        interval: 2500
+        repeat: false
+        onTriggered: {
+            root.showConnectedModal = false
+        }
+    }
+
+    function startAddNewDeviceFlow() {
+        root.prefTargetIndex = -1
+        root.prefTargetName = "New Device"
+        root.prefHandsFree = true
+        root.prefAudio = true
+        root.showPreferencesModal = true
+    }
+
+    // Real Bluetooth Pairing & Connection Listener
+    Connections {
+        target: systemController
+
+        function onPairingAuthenticationWaiting(name, passkey) {
+            console.log("[Bluetooth] Passkey auth waiting from mobile:", name, "Passkey:", passkey)
+            connectingTransitionTimer.stop()
+            root.passkeyAuthDeviceName = name && name.length > 0 ? name : (systemController.incomingPairingDeviceName || "Mobile Device")
+            root.passkeyAuthCode = passkey && passkey.length > 0 ? passkey : (systemController.incomingPairingPasskey || "000000")
+            root.showPasskeyAuthModal = true
+            root.showConnectingModal = false
+            root.showConnectedModal = false
+            root.showPreferencesModal = false
+        }
+
+        function onDeviceConnecting(name, mac) {
+            console.log("[Bluetooth] Device connecting:", name, mac)
+            root.showPasskeyAuthModal = false
+            root.connectingDeviceName = name && name.length > 0 ? name : (root.passkeyAuthDeviceName || systemController.connectingDeviceName || "Mobile Device")
+            root.showConnectingModal = true
+            root.showConnectedModal = false
+            root.showPreferencesModal = false
+            connectingTransitionTimer.restart()
+        }
+
+        function onDevicePairedSuccessfully(mac, name) {
+            console.log("[Bluetooth] Real device successfully paired:", name, mac)
+            var n = (name || "").toLowerCase()
+            if (n.indexOf("mouse") !== -1 || n.indexOf("pebble") !== -1 || n.indexOf("keyboard") !== -1) {
+                console.log("[Bluetooth] Input peripheral paired (mouse/keyboard) -> ignoring in IVI phone UI")
+                root.showPasskeyAuthModal = false
+                return
+            }
+            root.showPasskeyAuthModal = false
+            root.connectedDeviceName = name && name.length > 0 ? name : (root.passkeyAuthDeviceName || root.connectingDeviceName || "Mobile Device")
+
+            // Strictly apply preferences to the newly paired device by MAC
+            systemController.setDevicePreferencesForMac(mac, root.prefHandsFree, root.prefAudio)
+
+            // Ensure the user sees the Connecting animation (Photo 2) before transitioning to Connected (Photo 1)
+            if (root.showConnectingModal && connectingTransitionTimer.running) {
+                console.log("[Bluetooth] Device paired, smoothly finishing connecting animation")
+            } else {
+                root.connectingDeviceName = root.connectedDeviceName
+                root.showConnectingModal = true
+                connectingTransitionTimer.restart()
+            }
+        }
+
+        function onBluetoothConnectionChanged() {
+            if (systemController.isBluetoothConnected) {
+                // If connecting animation or modal is running, let connectingTransitionTimer smoothly finish and show Connected modal
+                if (!connectingTransitionTimer.running && !root.showConnectingModal && !root.showConnectedModal) {
+                    if (root.currentView === "add_new") {
+                        console.log("[Bluetooth] Connection detected while on add_new -> switching to list")
+                        root.currentView = "list"
+                    }
+                }
+            }
+        }
+
+        function onBluetoothDeviceListChanged() {
+            if (systemController.isBluetoothConnected && root.currentView === "add_new" && !connectingTransitionTimer.running && !root.showConnectingModal && !root.showConnectedModal) {
+                console.log("[Bluetooth] Device list changed with connection -> switching to list")
+                root.currentView = "list"
+            }
+        }
+
+        function onPairingAuthWaitingChanged() {
+            if (!systemController.isPairingAuthWaiting && root.showPasskeyAuthModal) {
+                if (!root.showConnectedModal && !root.showConnectingModal && !connectingTransitionTimer.running) {
+                    root.showPasskeyAuthModal = false
+                }
+            }
+        }
+
+        function onConnectingDeviceChanged() {
+            if (systemController.isConnectingDevice) {
+                root.connectingDeviceName = systemController.connectingDeviceName && systemController.connectingDeviceName.length > 0
+                    ? systemController.connectingDeviceName : (root.connectingDeviceName || "Mobile Device")
+                root.showConnectingModal = true
+                connectingTransitionTimer.restart()
+            }
+        }
+
+        function onDeviceDisconnected(mac, name) {
+            console.log("[Bluetooth] Device disconnected:", name, mac)
+            // Silent disconnect handling - modals only appear during explicit Add and Delete
+        }
+    }
 
     // Disconnecting / Disconnected Modal State (Photos 1788551610294 & 1788551717980)
     property bool showDisconnectingModal: false
     property bool showDisconnectedModal: false
     property string modalDeviceName: ""
-
-    // Menu dropdown state
-    property bool showMenuDropdown: false
+    property string disconnectingModalTitle: "Deleting device..."
+    property string disconnectedModalText: "Device disconnected."
 
     // Delete mode / view state (Photo media_1788552761346)
     property bool isDeleteMode: false
@@ -52,9 +196,14 @@ Rectangle {
         showPreferencesModal = false
         showDisconnectingModal = false
         showDisconnectedModal = false
-        showMenuDropdown = false
+        showPasskeyAuthModal = false
+        showConnectingModal = false
+        showConnectedModal = false
         isDeleteMode = false
         deleteSelection = []
+        connectingTransitionTimer.stop()
+        disconnectFlowTimer.stop()
+        disconnectedNoticeTimer.stop()
     }
 
     function isIndexMarked(idx) {
@@ -86,18 +235,54 @@ Rectangle {
 
     function deleteMarkedDevices() {
         if (deleteSelection.length === 0) return
-        console.log("[Bluetooth] Deleting marked devices:", deleteSelection)
-        systemController.deleteMultipleBluetoothDevices(deleteSelection)
-        deleteSelection = []
-        root.currentView = "list"
+        var macs = []
+        for (var i = 0; i < deleteSelection.length; i++) {
+            var sIdx = deleteSelection[i]
+            if (sIdx >= 0 && sIdx < systemController.bluetoothDeviceList.length) {
+                var dMac = systemController.bluetoothDeviceList[sIdx].mac
+                if (dMac && dMac.length > 0) {
+                    macs.push(dMac)
+                }
+            }
+        }
+        if (macs.length === 0) return
+        console.log("[Bluetooth] Deleting marked devices by MAC:", macs)
+
+        if (macs.length === 1) {
+            var singleIdx = deleteSelection[0]
+            root.modalDeviceName = (singleIdx >= 0 && singleIdx < systemController.bluetoothDeviceList.length) ? systemController.bluetoothDeviceList[singleIdx].name : "Bluetooth Device"
+        } else {
+            root.modalDeviceName = macs.length + " Devices"
+        }
+        root.disconnectingModalTitle = "Deleting device..."
+        root.disconnectedModalText = "Device disconnected."
+        root.showDisconnectingModal = true
+        root.showDisconnectedModal = false
+
+        disconnectFlowTimer.targetAction = "delete_marked"
+        disconnectFlowTimer.macsToDelete = macs
+        disconnectFlowTimer.oldIndex = -1
+        disconnectFlowTimer.deviceName = root.modalDeviceName
+        disconnectFlowTimer.restart()
     }
 
     function deleteDeviceAt(idx) {
-        systemController.removeDevice(idx)
-        if (systemController.bluetoothDeviceList.length === 0) {
-            root.isDeleteMode = false
-        }
+        if (idx < 0 || idx >= systemController.bluetoothDeviceList.length) return
+        var dev = systemController.bluetoothDeviceList[idx]
+        root.modalDeviceName = dev.name
+        root.disconnectingModalTitle = "Deleting device..."
+        root.disconnectedModalText = "Device disconnected."
+        root.showDisconnectingModal = true
+        root.showDisconnectedModal = false
+
+        disconnectFlowTimer.targetAction = "delete_single"
+        disconnectFlowTimer.macsToDelete = [dev.mac]
+        disconnectFlowTimer.oldIndex = idx
+        disconnectFlowTimer.deviceName = root.modalDeviceName
+        disconnectFlowTimer.restart()
     }
+
+
 
     // ====================================================
     // 1. SUB-HEADER BAR
@@ -155,40 +340,10 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
-            // Right Action Buttons: Menu (if list view) + Back (⮌)
+            // Right Action Button: Back (⮌)
             Row {
                 spacing: 12
                 Layout.alignment: Qt.AlignVCenter
-
-                // Menu Button (only visible on list view)
-                Rectangle {
-                    visible: root.currentView === "list"
-                    width: 90
-                    height: 40
-                    color: menuMouse.pressed ? "#389BFF" : (menuMouse.containsMouse ? "#3A6C9B" : "#2E5B84")
-                    border.color: menuMouse.pressed ? "#80D8FF" : "#3F74A3"
-                    border.width: 1
-                    radius: 3
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "Menu"
-                        color: "#FFFFFF"
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                        font.family: "Roboto"
-                    }
-
-                    MouseArea {
-                        id: menuMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            root.showMenuDropdown = !root.showMenuDropdown
-                        }
-                    }
-                }
 
                 // Back Arrow Button (⮌)
                 Rectangle {
@@ -216,7 +371,6 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            root.showMenuDropdown = false
                             if (root.currentView === "add_new") {
                                 if (root.returnScreenAfterAdd !== "" && root.returnScreenAfterAdd !== "list") {
                                     var targetScreen = root.returnScreenAfterAdd
@@ -228,6 +382,7 @@ Rectangle {
                                 }
                             } else if (root.currentView === "delete") {
                                 root.deleteSelection = []
+                                root.isDeleteMode = false
                                 root.currentView = "list"
                             } else {
                                 root.backClicked()
@@ -237,112 +392,6 @@ Rectangle {
                 }
             }
         }
-    }
-
-    // Menu Dropdown Card
-    Rectangle {
-        id: menuDropdown
-        anchors.top: headerBar.bottom
-        anchors.topMargin: 4
-        anchors.right: parent.right
-        anchors.rightMargin: 90
-        width: 220
-        height: 104
-        radius: 6
-        color: "#132130"
-        border.color: "#2E4766"
-        border.width: 1.5
-        visible: root.showMenuDropdown && root.currentView === "list"
-        z: 80
-
-        Column {
-            anchors.fill: parent
-            anchors.margins: 4
-            spacing: 2
-
-            // Option 1: Bluetooth Preferences
-            Rectangle {
-                width: parent.width
-                height: 46
-                radius: 4
-                color: item1Mouse.pressed ? "#224A75" : (item1Mouse.containsMouse ? "#1A3654" : "transparent")
-
-                Text {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 16
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Bluetooth Preferences"
-                    color: "#FFFFFF"
-                    font.pixelSize: 16
-                    font.weight: Font.Medium
-                }
-
-                MouseArea {
-                    id: item1Mouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.showMenuDropdown = false
-                        if (systemController.bluetoothDeviceList.length > 0) {
-                            var idx = Math.max(0, systemController.activeDeviceIndex)
-                            var dev = systemController.bluetoothDeviceList[idx]
-                            root.prefTargetIndex = idx
-                            root.prefTargetName = dev.name
-                            root.prefHandsFree = dev.handsFree
-                            root.prefAudio = dev.audio
-                            root.prefIsAddingNew = false
-                            root.showPreferencesModal = true
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                width: parent.width - 20
-                height: 1
-                color: "#1E334A"
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-
-            // Option 2: Delete Devices
-            Rectangle {
-                width: parent.width
-                height: 46
-                radius: 4
-                color: item2Mouse.pressed ? "#224A75" : (item2Mouse.containsMouse ? "#1A3654" : "transparent")
-
-                Text {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 16
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Delete devices"
-                    color: "#FFFFFF"
-                    font.pixelSize: 16
-                    font.weight: Font.Medium
-                }
-
-                MouseArea {
-                    id: item2Mouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.showMenuDropdown = false
-                        root.deleteSelection = []
-                        root.currentView = "delete"
-                    }
-                }
-            }
-        }
-    }
-
-    // Close menu when clicking outside
-    MouseArea {
-        anchors.fill: parent
-        visible: root.showMenuDropdown
-        z: 70
-        onClicked: root.showMenuDropdown = false
     }
 
     // ====================================================
@@ -415,9 +464,9 @@ Rectangle {
                     Behavior on color { ColorAnimation { duration: 120 } }
 
                     property var devData: modelData
-                    property bool isConnected: devData.connected === true
-                    property bool hasHF: devData.handsFree === true
-                    property bool hasAudio: devData.audio === true
+                    property bool isConnected: devData ? (devData.connected === true || devData["connected"] === true) : false
+                    property bool hasHF: devData ? (devData.handsFree === true || devData["handsFree"] === true) : false
+                    property bool hasAudio: devData ? (devData.audio === true || devData["audio"] === true) : false
 
                     Row {
                         anchors.left: parent.left
@@ -438,7 +487,7 @@ Rectangle {
                         // Device Name (Cyan when connected, white when inactive)
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
-                            text: devData.name || "Bluetooth Device"
+                            text: (devData && (devData.name || devData["name"])) ? (devData.name || devData["name"]) : "Bluetooth Device"
                             color: isConnected ? "#38B6FF" : "#FFFFFF"
                             font.pixelSize: 26
                             font.weight: Font.DemiBold
@@ -485,40 +534,7 @@ Rectangle {
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: {
-                                        if (hasHF) {
-                                            // Disconnect Hands-free on this device
-                                            root.modalDeviceName = devData.name
-                                            root.showDisconnectingModal = true
-                                            deactivateTimer.oldIndex = index
-                                            deactivateTimer.deviceName = devData.name
-                                            deactivateTimer.targetAction = "disconnect_only"
-                                            deactivateTimer.start()
-                                        } else {
-                                            // Connect Hands-free on this device
-                                            var activeOtherIndex = -1
-                                            var activeOtherName = ""
-                                            var list = systemController.bluetoothDeviceList
-                                            for (var i = 0; i < list.length; ++i) {
-                                                if (i !== index && list[i].handsFree === true) {
-                                                    activeOtherIndex = i
-                                                    activeOtherName = list[i].name
-                                                    break
-                                                }
-                                            }
-
-                                            if (activeOtherIndex >= 0) {
-                                                // Deactivate older device hands-free first
-                                                root.modalDeviceName = activeOtherName
-                                                root.showDisconnectingModal = true
-                                                deactivateTimer.oldIndex = activeOtherIndex
-                                                deactivateTimer.deviceName = activeOtherName
-                                                deactivateTimer.newTargetIndex = index
-                                                deactivateTimer.targetAction = "switch_hf"
-                                                deactivateTimer.start()
-                                            } else {
-                                                systemController.setDevicePreferences(index, true, hasAudio)
-                                            }
-                                        }
+                                        systemController.setDevicePreferences(index, !hasHF, hasAudio)
                                     }
                                 }
                             }
@@ -594,7 +610,7 @@ Rectangle {
                         color: "#181D26"
                     }
 
-                    // Clicking the row connects the device or switches to it
+                    // Clicking the row connects the device
                     MouseArea {
                         id: devRowMouse
                         anchors.left: parent.left
@@ -606,28 +622,11 @@ Rectangle {
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (root.isDeleteMode) return
-                            if (!isConnected || !hasHF) {
-                                var activeOtherIdx = -1
-                                var activeOtherNm = ""
-                                var dList = systemController.bluetoothDeviceList
-                                for (var k = 0; k < dList.length; ++k) {
-                                    if (k !== index && dList[k].handsFree === true) {
-                                        activeOtherIdx = k
-                                        activeOtherNm = dList[k].name
-                                        break
-                                    }
-                                }
-                                if (activeOtherIdx >= 0) {
-                                    root.modalDeviceName = activeOtherNm
-                                    root.showDisconnectingModal = true
-                                    deactivateTimer.oldIndex = activeOtherIdx
-                                    deactivateTimer.deviceName = activeOtherNm
-                                    deactivateTimer.newTargetIndex = index
-                                    deactivateTimer.targetAction = "switch_hf"
-                                    deactivateTimer.start()
-                                } else {
-                                    systemController.connectDevice(index)
-                                }
+                            if (!isConnected) {
+                                root.connectingDeviceName = (devData && (devData.name || devData["name"])) ? (devData.name || devData["name"]) : "Mobile Device"
+                                root.showConnectingModal = true
+                                connectingTransitionTimer.restart()
+                                systemController.connectDevice(index)
                             }
                         }
                     }
@@ -673,20 +672,19 @@ Rectangle {
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
                         onClicked: {
-                            root.currentStep = 1
-                            root.currentView = "add_new"
-                            root.isDeleteMode = false
+                            root.startAddNewDeviceFlow()
                         }
                     }
                 }
 
                 // Button 2: "Delete devices"
                 Rectangle {
+                    readonly property bool hasDevices: systemController.bluetoothDeviceList.length > 0
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 3
-                    color: delMouse.pressed ? "#389BFF" : (delMouse.containsMouse ? "#3A6C9B" : "#2A5680")
-                    border.color: delMouse.pressed ? "#80D8FF" : "#3C72A4"
+                    color: hasDevices ? (delMouse.pressed ? "#389BFF" : (delMouse.containsMouse ? "#3A6C9B" : "#2A5680")) : "#141C26"
+                    border.color: hasDevices ? (delMouse.pressed ? "#80D8FF" : "#3C72A4") : "#1E2A38"
                     border.width: 1
 
                     Behavior on color { ColorAnimation { duration: 100 } }
@@ -694,21 +692,25 @@ Rectangle {
                     Text {
                         anchors.centerIn: parent
                         text: "Delete devices"
-                        color: "#B8DAFB"
+                        color: parent.hasDevices ? "#B8DAFB" : "#4A5B6E"
                         font.pixelSize: 22
                         font.weight: Font.DemiBold
                         font.family: "Roboto"
-                        scale: delMouse.pressed ? 0.96 : 1.0
+                        scale: (parent.hasDevices && delMouse.pressed) ? 0.96 : 1.0
                     }
 
                     MouseArea {
                         id: delMouse
                         anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
+                        enabled: parent.hasDevices
+                        hoverEnabled: parent.hasDevices
+                        cursorShape: parent.hasDevices ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: {
-                            root.deleteSelection = []
-                            root.currentView = "delete"
+                            if (parent.hasDevices) {
+                                root.deleteSelection = []
+                                root.isDeleteMode = true
+                                root.currentView = "delete"
+                            }
                         }
                     }
                 }
@@ -875,12 +877,11 @@ Rectangle {
                                     MouseArea {
                                         id: nextMouse
                                         anchors.fill: parent
+                                        enabled: root.currentStep < 5
                                         cursorShape: root.currentStep < 5 ? Qt.PointingHandCursor : Qt.ArrowCursor
                                         onClicked: {
                                             if (root.currentStep < 5) {
                                                 root.currentStep++
-                                            } else {
-                                                root.initiateDevicePairing()
                                             }
                                         }
                                     }
@@ -916,12 +917,6 @@ Rectangle {
                                 font.pixelSize: 44
                                 font.weight: Font.Bold
                                 font.family: "Roboto"
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.initiateDevicePairing()
-                                }
                             }
 
                             Item { width: 1; height: 8 }
@@ -1196,83 +1191,52 @@ Rectangle {
     // 3. AUTHENTIC AUTOMOTIVE PAIRING & DEACTIVATION LOGIC
     // ====================================================
 
-    // Triggered when phone connects to vehicle
-    function initiateDevicePairing() {
-        console.log("[Bluetooth] Phone initiating connection for:", root.pendingDeviceName)
-
-        // Check if an existing device currently has Hands-free active
-        var activeOldDevice = ""
-        var oldIndex = -1
-        var devList = systemController.bluetoothDeviceList
-        for (var i = 0; i < devList.length; ++i) {
-            if (devList[i].handsFree === true) {
-                activeOldDevice = devList[i].name
-                oldIndex = i
-                break
-            }
-        }
-
-        if (activeOldDevice !== "") {
-            // Older device must disconnect hands-free (Photo 1788551610294)
-            root.modalDeviceName = activeOldDevice
-            root.showDisconnectingModal = true
-
-            deactivateTimer.oldIndex = oldIndex
-            deactivateTimer.deviceName = activeOldDevice
-            deactivateTimer.targetAction = "pair_new"
-            deactivateTimer.start()
-        } else {
-            // Directly show Preferences (Photo 1788551459783) for the new device
-            openNewDevicePreferences()
-        }
-    }
-
-    function openNewDevicePreferences() {
-        root.prefTargetName = root.pendingDeviceName
-        root.prefHandsFree = true
-        root.prefAudio = true
-        root.prefIsAddingNew = true
-        root.showPreferencesModal = true
-    }
-
-    // Timer 1: Disconnecting -> Disconnected (Photo 1788551610294 to Photo 1788551717980)
+    // Timer 1: Disconnecting Animation (Photo 1788551610294) -> triggers Disconnected Notification (Photo 1788551717980)
     Timer {
-        id: deactivateTimer
+        id: disconnectFlowTimer
         property int oldIndex: 0
         property int newTargetIndex: -1
+        property var macsToDelete: []
         property string deviceName: ""
-        property string targetAction: "pair_new" // "pair_new" | "disconnect_only" | "switch_hf"
-        interval: 1400
+        property string targetAction: "none" // "none" | "delete_marked" | "delete_single"
+        interval: 1500
         repeat: false
         onTriggered: {
+            // Step 1: Hide Disconnecting / Deleting animation modal
             root.showDisconnectingModal = false
-            // Deactivate hands-free on older device
-            systemController.deactivateHandsFree(oldIndex)
 
-            // Show "Hands-free is disconnected." (Photo 1788551717980)
-            root.modalDeviceName = deviceName
+            if (targetAction === "delete_marked") {
+                systemController.deleteMultipleBluetoothDevices(disconnectFlowTimer.macsToDelete)
+                root.deleteSelection = []
+                root.isDeleteMode = false
+                root.currentView = "list"
+            } else if (targetAction === "delete_single") {
+                if (disconnectFlowTimer.macsToDelete && disconnectFlowTimer.macsToDelete.length > 0) {
+                    systemController.deleteMultipleBluetoothDevices(disconnectFlowTimer.macsToDelete)
+                } else if (oldIndex >= 0) {
+                    systemController.removeDevice(oldIndex)
+                }
+                root.isDeleteMode = false
+                root.currentView = "list"
+            }
+
+            // Step 2: Show Disconnected Modal (Photo 1788551717980)
+            root.modalDeviceName = deviceName && deviceName.length > 0 ? deviceName : root.modalDeviceName
             root.showDisconnectedModal = true
-            disconnectedNoticeTimer.start()
+            disconnectedNoticeTimer.restart()
         }
     }
 
-    // Timer 2: Dismiss Disconnected notice -> Proceed to preferences or connection
+    property alias deactivateTimer: disconnectFlowTimer
+
+    // Timer 2: Dismiss Disconnected notice after 2.2s
     Timer {
         id: disconnectedNoticeTimer
-        interval: 1300
+        interval: 2200
         repeat: false
         onTriggered: {
             root.showDisconnectedModal = false
-            if (deactivateTimer.targetAction === "pair_new") {
-                // Open Bluetooth Preferences for the new device
-                root.openNewDevicePreferences()
-            } else if (deactivateTimer.targetAction === "switch_hf") {
-                // Connect hands-free to target device
-                if (deactivateTimer.newTargetIndex >= 0) {
-                    var currentAudio = systemController.bluetoothDeviceList[deactivateTimer.newTargetIndex].audio
-                    systemController.setDevicePreferences(deactivateTimer.newTargetIndex, true, currentAudio)
-                }
-            }
+            root.currentView = "list"
         }
     }
 
@@ -1455,32 +1419,18 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 root.showPreferencesModal = false
-                                if (root.prefIsAddingNew) {
-                                    // Add the new device into controller
-                                    systemController.addDevice(root.pendingDeviceName, root.prefHandsFree, root.prefAudio)
-                                    // Advance to next realistic device name
-                                    root.poolIndex = (root.poolIndex + 1) % root.deviceNamesPool.length
-                                    root.pendingDeviceName = root.deviceNamesPool[root.poolIndex]
+                                if (root.prefTargetIndex === -1) {
+                                    // Proceed to the 5-step info tab and enable discoverability!
+                                    root.currentStep = 1
+                                    root.currentView = "add_new"
+                                    root.isDeleteMode = false
+                                } else if (root.prefTargetIndex >= 0 && root.prefTargetIndex < systemController.bluetoothDeviceList.length) {
+                                    systemController.setDevicePreferences(root.prefTargetIndex, root.prefHandsFree, root.prefAudio)
                                     root.currentView = "list"
-
-                                    // If invoked from another screen (e.g. Phone), return smoothly
                                     if (root.returnScreenAfterAdd !== "" && root.returnScreenAfterAdd !== "list") {
                                         var ret = root.returnScreenAfterAdd
                                         root.returnScreenAfterAdd = "list"
                                         root.devicePairingCompleted(ret)
-                                    }
-                                } else {
-                                    // Update existing device preferences
-                                    var currentHF = systemController.bluetoothDeviceList[root.prefTargetIndex].handsFree
-                                    if (currentHF && !root.prefHandsFree) {
-                                        root.modalDeviceName = root.prefTargetName
-                                        root.showDisconnectingModal = true
-                                        deactivateTimer.oldIndex = root.prefTargetIndex
-                                        deactivateTimer.deviceName = root.prefTargetName
-                                        deactivateTimer.targetAction = "disconnect_only"
-                                        deactivateTimer.start()
-                                    } else {
-                                        systemController.setDevicePreferences(root.prefTargetIndex, root.prefHandsFree, root.prefAudio)
                                     }
                                 }
                             }
@@ -1511,13 +1461,8 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 root.showPreferencesModal = false
-                                if (root.prefIsAddingNew) {
+                                if (root.prefTargetIndex === -1) {
                                     root.currentView = "list"
-                                    if (root.returnScreenAfterAdd !== "" && root.returnScreenAfterAdd !== "list") {
-                                        var ret = root.returnScreenAfterAdd
-                                        root.returnScreenAfterAdd = "list"
-                                        root.devicePairingCompleted(ret)
-                                    }
                                 }
                             }
                         }
@@ -1600,7 +1545,7 @@ Rectangle {
                 }
 
                 Text {
-                    text: "Disconnecting hands-free..."
+                    text: root.disconnectingModalTitle
                     color: "#C3D8EC"
                     font.pixelSize: 22
                     font.family: "Roboto"
@@ -1675,12 +1620,348 @@ Rectangle {
                 }
 
                 Text {
-                    text: "Hands-free is disconnected."
+                    text: root.disconnectedModalText
                     color: "#C3D8EC"
                     font.pixelSize: 22
                     font.family: "Roboto"
                     horizontalAlignment: Text.AlignHCenter
                     anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+        }
+    }
+
+    // ====================================================
+    // MODAL 4: ADD NEW DEVICE - PASSKEY WAITING MODAL (Photo Match!)
+    // ====================================================
+    Rectangle {
+        id: passkeyAuthModalOverlay
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.75)
+        visible: root.showPasskeyAuthModal
+        z: 115
+
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 680
+            height: 360
+            radius: 8
+            color: "#0E1B2C"
+            border.color: "#2C496F"
+            border.width: 1.5
+            clip: true
+
+            // Top Blue Header Bar
+            Rectangle {
+                id: authHeaderBar
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 48
+                color: "#22568F"
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Add new device"
+                    color: "#FFFFFF"
+                    font.pixelSize: 22
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                }
+            }
+
+            // Body Area
+            Column {
+                anchors.top: authHeaderBar.bottom
+                anchors.topMargin: 16
+                anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.right: parent.right
+                anchors.rightMargin: 24
+                anchors.bottom: authCancelBtn.top
+                anchors.bottomMargin: 14
+                spacing: 12
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Device name: " + (root.passkeyAuthDeviceName || systemController.incomingPairingDeviceName || "Mobile Device")
+                    color: "#FFFFFF"
+                    font.pixelSize: 22
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Passkey: " + (root.passkeyAuthCode || systemController.incomingPairingPasskey || "000000")
+                    color: "#F6C714"
+                    font.pixelSize: 25
+                    font.weight: Font.Bold
+                    font.family: "Roboto"
+                }
+
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: parent.width - 40
+                    height: 1
+                    color: Qt.rgba(255, 255, 255, 0.15)
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Waiting for Bluetooth authentication..."
+                    color: "#D0E0F0"
+                    font.pixelSize: 18
+                    font.family: "Roboto"
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Please check the passkey and accept device\npairing on your mobile phone."
+                    color: "#D0E0F0"
+                    font.pixelSize: 18
+                    font.family: "Roboto"
+                    horizontalAlignment: Text.AlignHCenter
+                    lineHeight: 1.2
+                }
+            }
+
+            // Bottom Cancel Button
+            Rectangle {
+                id: authCancelBtn
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 16
+                anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.right: parent.right
+                anchors.rightMargin: 24
+                height: 48
+                radius: 4
+                color: authCancelMouse.pressed ? "#1E477A" : "#2E629E"
+                border.color: "#4A82C2"
+                border.width: 1
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Cancel"
+                    color: "#FFFFFF"
+                    font.pixelSize: 20
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                }
+
+                MouseArea {
+                    id: authCancelMouse
+                    anchors.fill: parent
+                    onClicked: {
+                        root.showPasskeyAuthModal = false
+                        systemController.cancelPairing()
+                    }
+                }
+            }
+        }
+    }
+
+    // ====================================================
+    // MODAL 5: CONNECTING MOBILE DEVICE... (Photo 2 Match!)
+    // ====================================================
+    Rectangle {
+        id: connectingModalOverlay
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.7)
+        visible: root.showConnectingModal
+        z: 114
+
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 680
+            height: 320
+            radius: 6
+            color: "#0D1826"
+            border.color: "#27405E"
+            border.width: 1.5
+
+            Column {
+                anchors.top: parent.top
+                anchors.topMargin: 22
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 12
+                width: parent.width - 48
+
+                // Circular Rotating Loading Dots Ring
+                Item {
+                    width: 54
+                    height: 54
+                    anchors.horizontalCenter: parent.horizontalCenter
+
+                    Repeater {
+                        model: 12
+                        Item {
+                            anchors.centerIn: parent
+                            width: 54
+                            height: 54
+                            rotation: index * 30
+
+                            Rectangle {
+                                anchors.top: parent.top
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 5
+                                height: 8
+                                radius: 2.5
+                                color: "#FFFFFF"
+                                opacity: Math.max(0.12, 1.0 - (index / 12.0))
+                            }
+                        }
+                    }
+
+                    RotationAnimation on rotation {
+                        from: 0
+                        to: 360
+                        duration: 1000
+                        loops: Animation.Infinite
+                        running: root.showConnectingModal
+                    }
+                }
+
+                // Phone Name
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: root.connectingDeviceName || systemController.connectingDeviceName || "Mobile Device"
+                    color: "#FFFFFF"
+                    font.pixelSize: 24
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                }
+
+                // Connecting mobile device...
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Connecting mobile device..."
+                    color: "#FFFFFF"
+                    font.pixelSize: 20
+                    font.weight: Font.Medium
+                    font.family: "Roboto"
+                }
+
+                // Confirm Bluetooth is active on your device.
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Confirm Bluetooth is active on your device."
+                    color: "#C3D8EC"
+                    font.pixelSize: 18
+                    font.family: "Roboto"
+                }
+            }
+
+            // Cancel connection button
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 18
+                anchors.left: parent.left
+                anchors.leftMargin: 24
+                anchors.right: parent.right
+                anchors.rightMargin: 24
+                height: 48
+                radius: 4
+                color: cancelConnMouse.pressed ? "#253E5E" : "#35547C"
+                border.color: "#4F76A6"
+                border.width: 1
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Cancel connection"
+                    color: "#FFFFFF"
+                    font.pixelSize: 19
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                }
+
+                MouseArea {
+                    id: cancelConnMouse
+                    anchors.fill: parent
+                    onClicked: {
+                        connectingTransitionTimer.stop()
+                        root.showConnectingModal = false
+                        systemController.cancelConnectingDevice()
+                    }
+                }
+            }
+        }
+    }
+
+    // ====================================================
+    // MODAL 6: HANDS-FREE AND BLUETOOTH AUDIO ARE CONNECTED (Photo 1 Match!)
+    // ====================================================
+    Rectangle {
+        id: connectedModalOverlay
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.7)
+        visible: root.showConnectedModal
+        z: 116
+
+        MouseArea { anchors.fill: parent }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: 680
+            height: 260
+            radius: 6
+            color: "#0D1826"
+            border.color: "#27405E"
+            border.width: 1.5
+
+            Column {
+                anchors.centerIn: parent
+                spacing: 16
+                width: parent.width - 40
+
+                // Cyan Info Circle Icon ⓘ
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 50
+                    height: 50
+                    radius: 25
+                    color: "#38B6FF"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "i"
+                        color: "#0B1522"
+                        font.pixelSize: 32
+                        font.weight: Font.Bold
+                        font.family: "Roboto"
+                    }
+                }
+
+                // Phone Name
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: root.connectedDeviceName || systemController.connectingDeviceName || "Mobile Device"
+                    color: "#FFFFFF"
+                    font.pixelSize: 24
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                }
+
+                // Hands-free and Bluetooth Audio are connected.
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Hands-free and Bluetooth Audio are connected."
+                    color: "#FFFFFF"
+                    font.pixelSize: 21
+                    font.weight: Font.DemiBold
+                    font.family: "Roboto"
+                    horizontalAlignment: Text.AlignHCenter
                 }
             }
         }

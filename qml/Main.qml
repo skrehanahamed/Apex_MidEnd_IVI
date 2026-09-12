@@ -12,6 +12,7 @@ import QtQuick.Layouts
 import "components/screens"
 import "components/navigation"
 import "components/icons"
+import "components"
 
 Window {
     id: mainWindow
@@ -145,6 +146,7 @@ Window {
     property string previousScreenBeforeReverse: "home"
     property string previousScreenBeforeDisplay: "settings"
     property bool volumeBarVisible: false
+    property string incomingQuickReplyFeedback: ""
 
     function showVolumeBar() {
         volumeBarVisible = true
@@ -158,6 +160,13 @@ Window {
         onTriggered: {
             mainWindow.volumeBarVisible = false
         }
+    }
+
+    Timer {
+        id: quickReplyFeedbackTimer
+        interval: 5000
+        repeat: false
+        onTriggered: mainWindow.incomingQuickReplyFeedback = ""
     }
 
     Connections {
@@ -221,11 +230,15 @@ Window {
         } else if (systemController.currentScreen === "all_menus" || systemController.currentScreen === "home") {
             mainWindow.previousScreenBeforePhone = systemController.currentScreen
         }
-        if (!systemController.hasHandsFreeDevice) {
+
+        var isConnected = systemController.hasHandsFreeDevice
+        if (!isConnected) {
+            console.log("[Main] Phone app requested but no hands-free phone is connected -> displaying noPhoneDialog")
             noPhoneDialog.visible = true
-        } else {
-            systemController.navigateTo("phone")
+            return
         }
+
+        systemController.navigateTo("phone")
     }
 
     function handleMediaNavigation(fromScreen) {
@@ -234,12 +247,24 @@ Window {
         } else if (systemController.currentScreen === "all_menus" || systemController.currentScreen === "home") {
             mainWindow.previousScreenBeforeMedia = systemController.currentScreen
         }
-        // If FM, AM, Bluetooth, or USB media is running OR paused, take directly to the active media player
-        if (systemController.selectedMediaSource === "fm" || systemController.selectedMediaSource === "am" || systemController.selectedMediaSource === "bluetooth" || systemController.selectedMediaSource === "usb") {
+
+        // When accessed from All Menus -> ALWAYS show Media Selection screen (FM, AM, Bluetooth, USB, etc.)
+        if (fromScreen === "all_menus" || mainWindow.previousScreenBeforeMedia === "all_menus") {
+            console.log("[Apex IVI] Navigating to Media Selection from All Menus")
+            systemController.navigateTo("media_select")
+            return
+        }
+
+        // On Main Screen (Home):
+        // Only show Media Selection once when starting media (if no media is currently active)
+        // If media is already active/playing, go directly to the active media player screen
+        if (systemController.selectedMediaSource === "bluetooth" || systemController.selectedMediaSource === "usb") {
+            systemController.navigateTo("bluetooth_audio")
+        } else if (systemController.selectedMediaSource === "fm" || systemController.selectedMediaSource === "am") {
             mainWindow.previousScreenBeforeRadio = mainWindow.previousScreenBeforeMedia
             systemController.navigateTo("radio")
         } else {
-            // When all media are closed/stopped or no media is running, open the Media Selection Screen
+            // When starting the media (no media selected/active yet), open the Media Selection Screen
             systemController.navigateTo("media_select")
         }
     }
@@ -261,6 +286,70 @@ Window {
                 if (typeof soundSettingsScreen !== "undefined" && typeof soundSettingsScreen.resetToDefault === "function") soundSettingsScreen.resetToDefault()
                 if (typeof buttonSettingsScreen !== "undefined" && typeof buttonSettingsScreen.resetToDefault === "function") buttonSettingsScreen.resetToDefault()
                 if (typeof generalSettingsScreen !== "undefined" && typeof generalSettingsScreen.resetToDefault === "function") generalSettingsScreen.resetToDefault()
+            }
+        }
+
+        function onBluetoothDeviceListChanged() {
+            if (!systemController.hasHandsFreeDevice) {
+                if (systemController.currentScreen === "phone") {
+                    console.log("[Main] No HandsFree device connected while on Phone screen -> closing Phone and showing noPhoneDialog")
+                    systemController.navigateTo(mainWindow.previousScreenBeforePhone || "home")
+                    noPhoneDialog.visible = true
+                }
+            }
+        }
+
+        function onPhoneConnectionChanged() {
+            if (!systemController.hasHandsFreeDevice) {
+                if (systemController.currentScreen === "phone") {
+                    console.log("[Main] Phone disconnected while on Phone screen -> closing Phone and showing noPhoneDialog")
+                    systemController.navigateTo(mainWindow.previousScreenBeforePhone || "home")
+                    noPhoneDialog.visible = true
+                }
+            }
+        }
+
+        function onBluetoothConnectionChanged() {
+            if (!systemController.isBluetoothConnected || !systemController.hasHandsFreeDevice) {
+                if (systemController.currentScreen === "phone") {
+                    console.log("[Main] Bluetooth disconnected while on Phone screen -> closing Phone and showing noPhoneDialog")
+                    systemController.navigateTo(mainWindow.previousScreenBeforePhone || "home")
+                    noPhoneDialog.visible = true
+                }
+            }
+        }
+
+        function onPairingPromptChanged() {
+            if (systemController.isPairingPromptActive) {
+                if (systemController.currentScreen !== "bluetooth_connections") {
+                    mainWindow.previousScreenBeforeBt = systemController.currentScreen
+                    systemController.navigateTo("bluetooth_connections")
+                }
+            }
+        }
+
+        function onRemoteCallStarted(name, number, status) {
+            if (status === "incoming") {
+                incomingCallPopup.reset()
+            }
+        }
+
+        function onRemoteCallStatusChanged(status) {
+            if (status !== "incoming") {
+                incomingCallPopup.reset()
+            }
+        }
+
+        function onRemoteCallEnded() {
+            incomingCallPopup.reset()
+        }
+
+        function onQuickReplyFinished(success, message) {
+            incomingCallPopup.feedbackText = message
+            mainWindow.incomingQuickReplyFeedback = message
+            quickReplyFeedbackTimer.restart()
+            if (!success) {
+                incomingCallPopup.actionPending = false
             }
         }
     }
@@ -333,8 +422,14 @@ Window {
                 Layout.fillHeight: true
 
                 onRadioClicked: {
-                    console.log("[Apex IVI] Radio clicked from Home Card -> Opening Media/Radio")
-                    mainWindow.handleMediaNavigation("home")
+                    console.log("[Apex IVI] Radio clicked from Home Card -> Always opening FM/AM Radio")
+                    mainWindow.previousScreenBeforeRadio = "home"
+                    if (systemController.bluetoothPlaybackStatus === "playing" || systemController.selectedMediaSource === "bluetooth") {
+                        systemController.selectMediaSource("fm")
+                    } else if (systemController.selectedMediaSource !== "fm" && systemController.selectedMediaSource !== "am") {
+                        systemController.selectMediaSource("fm")
+                    }
+                    systemController.navigateTo("radio")
                 }
 
                 onProjectionClicked: {
@@ -375,8 +470,13 @@ Window {
                 }
 
                 onRadioClicked: {
-                    console.log("[Apex IVI] Radio Clicked from Bottom Dock -> Opening Radio")
+                    console.log("[Apex IVI] Radio Clicked from Bottom Dock -> Always opening FM/AM Radio")
                     mainWindow.previousScreenBeforeRadio = "home"
+                    if (systemController.bluetoothPlaybackStatus === "playing" || systemController.selectedMediaSource === "bluetooth") {
+                        systemController.selectMediaSource("fm")
+                    } else if (systemController.selectedMediaSource !== "fm" && systemController.selectedMediaSource !== "am") {
+                        systemController.selectMediaSource("fm")
+                    }
                     systemController.navigateTo("radio")
                 }
 
@@ -480,8 +580,13 @@ Window {
             }
 
             onRadioClicked: {
-                console.log("[Apex IVI] Radio clicked from All Menus")
+                console.log("[Apex IVI] FM/AM clicked from All Menus -> Always opening FM/AM Radio")
                 mainWindow.previousScreenBeforeRadio = "all_menus"
+                if (systemController.bluetoothPlaybackStatus === "playing" || systemController.selectedMediaSource === "bluetooth") {
+                    systemController.selectMediaSource("fm")
+                } else if (systemController.selectedMediaSource !== "fm" && systemController.selectedMediaSource !== "am") {
+                    systemController.selectMediaSource("fm")
+                }
                 systemController.navigateTo("radio")
             }
 
@@ -823,9 +928,8 @@ Window {
                 console.log("[Apex IVI] Add device requested from Phone screen")
                 mainWindow.previousScreenBeforeBt = "phone"
                 btConnScreen.returnScreenAfterAdd = "phone"
-                btConnScreen.currentView = "add_new"
-                btConnScreen.currentStep = 1
                 systemController.navigateTo("bluetooth_connections")
+                btConnScreen.startAddNewDeviceFlow()
             }
 
             onBluetoothSettingsRequested: {
@@ -871,7 +975,7 @@ Window {
             z: 30
             enabled: (systemController.currentScreen === "manual")
 
-            sectionTitle: (mainWindow.previousScreenBeforeManual === "voice_memo") ? "Voice memo" : ((mainWindow.previousScreenBeforeManual === "all_menus") ? "All menus" : ((mainWindow.previousScreenBeforeManual === "edit_home_icons") ? "Edit Home icons" : ((mainWindow.previousScreenBeforeManual === "phone") ? "Phone" : ((mainWindow.previousScreenBeforeManual === "sound_settings") ? "Sound" : ((mainWindow.previousScreenBeforeManual === "button_settings") ? "Button" : ((mainWindow.previousScreenBeforeManual === "general_settings") ? "General" : ((mainWindow.previousScreenBeforeManual === "quiet_mode") ? "Quiet mode" : ((mainWindow.previousScreenBeforeManual === "radio") ? "Radio" : ((mainWindow.previousScreenBeforeManual === "media_select") ? "Media" : ((mainWindow.previousScreenBeforeManual === "settings") ? "Settings" : "Home"))))))))))
+            sectionTitle: (mainWindow.previousScreenBeforeManual === "voice_memo") ? "Voice memo" : ((mainWindow.previousScreenBeforeManual === "all_menus") ? "All menus" : ((mainWindow.previousScreenBeforeManual === "edit_home_icons") ? "Edit Home icons" : ((mainWindow.previousScreenBeforeManual === "phone") ? "Phone" : ((mainWindow.previousScreenBeforeManual === "sound_settings") ? "Sound" : ((mainWindow.previousScreenBeforeManual === "button_settings") ? "Button" : ((mainWindow.previousScreenBeforeManual === "general_settings") ? "General" : ((mainWindow.previousScreenBeforeManual === "quiet_mode") ? "Quiet mode" : ((mainWindow.previousScreenBeforeManual === "radio") ? "FM/AM" : ((mainWindow.previousScreenBeforeManual === "media_select") ? "Media" : ((mainWindow.previousScreenBeforeManual === "settings") ? "Settings" : "Home"))))))))))
 
             x: (systemController.currentScreen === "manual") ? 0 : parent.width
 
@@ -950,17 +1054,17 @@ Window {
             }
 
             onBluetoothSelected: {
-                console.log("[Apex IVI] Bluetooth selected from Media Select -> Configuring media to Bluetooth and launching Media Player")
+                console.log("[Apex IVI] Bluetooth selected from Media Select -> Configuring media to Bluetooth and launching Bluetooth Audio")
                 systemController.selectMediaSource("bluetooth")
-                mainWindow.previousScreenBeforeRadio = "media_select"
-                systemController.navigateTo("radio")
+                mainWindow.previousScreenBeforeMedia = "media_select"
+                systemController.navigateTo("bluetooth_audio")
             }
 
             onUsbSelected: {
-                console.log("[Apex IVI] USB selected from Media Select -> Configuring media to USB and launching Media Player")
+                console.log("[Apex IVI] USB selected from Media Select -> Configuring media to USB and launching Bluetooth Audio")
                 systemController.selectMediaSource("usb")
-                mainWindow.previousScreenBeforeRadio = "media_select"
-                systemController.navigateTo("radio")
+                mainWindow.previousScreenBeforeMedia = "media_select"
+                systemController.navigateTo("bluetooth_audio")
             }
         }
 
@@ -1017,6 +1121,34 @@ Window {
             }
         }
 
+        // K2. BLUETOOTH AUDIO SCREEN (Matching Reference Photo with Live Track Info & Dynamic Artwork)
+        BluetoothAudioScreen {
+            id: bluetoothAudioScreen
+            width: parent.width
+            height: parent.height
+            z: 10
+            enabled: (systemController.currentScreen === "bluetooth_audio")
+
+            x: (systemController.currentScreen === "bluetooth_audio") ? 0 :
+               ((systemController.currentScreen === "media_select" && mainWindow.previousScreenBeforeMedia === "bluetooth_audio") ? -parent.width : parent.width)
+
+            Behavior on x {
+                NumberAnimation {
+                    duration: 350
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            onBackClicked: {
+                systemController.navigateTo(mainWindow.previousScreenBeforeMedia || "home")
+            }
+
+            onSwitchDeviceClicked: {
+                mainWindow.previousScreenBeforeBt = "bluetooth_audio"
+                systemController.navigateTo("bluetooth_connections")
+            }
+        }
+
         // L. VOICE MEMO SCREEN (Matching Genuine IVI Photo with real audio recording)
         VoiceMemoScreen {
             id: voiceMemoScreen
@@ -1046,6 +1178,55 @@ Window {
                 mainWindow.previousScreenBeforeManual = "voice_memo"
                 systemController.navigateTo("manual")
             }
+        }
+    }
+
+    // Global incoming-call surface: remains visible over Home, Media, Settings,
+    // DRVM, and Phone. It is driven only by a real HFP incoming-call state.
+    IncomingCallPopup {
+        id: incomingCallPopup
+        anchors.fill: parent
+        z: 1200
+        visible: systemController.bluetoothCallActive
+                 && systemController.bluetoothCallStatus === "incoming"
+        callerName: systemController.bluetoothCallName
+        callerNumber: systemController.bluetoothCallNumber
+        privacyMode: systemController.privacyMode
+
+        onAccepted: {
+            mainWindow.previousScreenBeforePhone = systemController.currentScreen
+            systemController.answerCall()
+            systemController.navigateTo("phone")
+        }
+
+        onRejected: systemController.hangUpCall()
+        onPrivacyToggled: systemController.togglePrivacyMode()
+        onQuickReplySelected: function(text) {
+            systemController.sendQuickReply(systemController.bluetoothCallNumber, text)
+        }
+    }
+
+    Rectangle {
+        id: quickReplyToast
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 34
+        z: 1300
+        visible: mainWindow.incomingQuickReplyFeedback.length > 0
+        width: Math.min(780, quickReplyToastText.implicitWidth + 56)
+        height: 56
+        radius: 7
+        color: "#14283B"
+        border.color: "#4E82AD"
+        border.width: 1
+
+        Text {
+            id: quickReplyToastText
+            anchors.centerIn: parent
+            text: mainWindow.incomingQuickReplyFeedback
+            color: "#FFFFFF"
+            font.family: "Roboto"
+            font.pixelSize: 18
         }
     }
 
@@ -1245,7 +1426,7 @@ Window {
 
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: "Would you like to add a new device?"
+                        text: (systemController.bluetoothDeviceList.length === 0) ? "Would you like to add a new device?" : "Would you like to connect a device?"
                         color: "#94A3B8"
                         font.pixelSize: 18
                         font.family: "Roboto"
@@ -1289,13 +1470,16 @@ Window {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                console.log("[NoPhoneDialog] Yes clicked -> Opening Add new device flow")
+                                console.log("[NoPhoneDialog] Yes clicked -> Opening Bluetooth Connections")
                                 noPhoneDialog.visible = false
                                 mainWindow.previousScreenBeforeBt = mainWindow.previousScreenBeforePhone
                                 btConnScreen.returnScreenAfterAdd = mainWindow.previousScreenBeforePhone
-                                btConnScreen.currentView = "add_new"
-                                btConnScreen.currentStep = 1
                                 systemController.navigateTo("bluetooth_connections")
+                                if (systemController.bluetoothDeviceList.length === 0) {
+                                    btConnScreen.startAddNewDeviceFlow()
+                                } else {
+                                    btConnScreen.currentView = "list"
+                                }
                             }
                         }
                     }
@@ -1330,6 +1514,180 @@ Window {
                             onClicked: {
                                 console.log("[NoPhoneDialog] No clicked -> Dismissing dialog")
                                 noPhoneDialog.visible = false
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ====================================================
+    // Modal Dialog: Bluetooth Pairing Request (Passkey Confirmation)
+    // ====================================================
+    Rectangle {
+        id: pairingRequestDialog
+        anchors.fill: parent
+        color: Qt.rgba(0, 0, 0, 0.78)
+        visible: systemController.isPairingPromptActive
+        z: 98
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: {} // Block touches from passing through
+        }
+
+        Rectangle {
+            id: pairingBox
+            anchors.centerIn: parent
+            width: 700
+            height: 380
+            color: "#121824"
+            border.color: "#2C394C"
+            border.width: 1.5
+            radius: 8
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 28
+                spacing: 14
+
+                // Header Icon & Title
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: 12
+
+                    Rectangle {
+                        width: 44
+                        height: 44
+                        radius: 22
+                        color: "#1D3650"
+                        border.color: "#3CA9F8"
+                        border.width: 1.5
+
+                        Image {
+                            anchors.centerIn: parent
+                            width: 26
+                            height: 26
+                            source: "qrc:/assets/apps/icon_all_phone.png"
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                        }
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Bluetooth Pairing Request"
+                        color: "#FFFFFF"
+                        font.pixelSize: 22
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
+                }
+
+                // Device Name Text
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: systemController.incomingPairingDeviceName ? systemController.incomingPairingDeviceName : "Bluetooth Device"
+                    color: "#8FAABF"
+                    font.pixelSize: 18
+                    font.family: "Roboto"
+                }
+
+                // Passkey Box Display
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 340
+                    height: 64
+                    color: "#0A1017"
+                    border.color: "#389BFF"
+                    border.width: 1.5
+                    radius: 6
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: systemController.incomingPairingPasskey ? systemController.incomingPairingPasskey : "000000"
+                        color: "#38B6FF"
+                        font.pixelSize: 36
+                        font.weight: Font.Bold
+                        font.letterSpacing: 6
+                        font.family: "Roboto"
+                    }
+                }
+
+                // Subtitle Instructions
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    horizontalAlignment: Text.AlignHCenter
+                    text: "Confirm that this passkey matches the code shown on your phone."
+                    color: "#94A3B8"
+                    font.pixelSize: 17
+                    font.family: "Roboto"
+                }
+
+                Item { width: 1; height: 6 }
+
+                // Action Buttons: [ Pair ] and [ Cancel ]
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: parent.width - 24
+                    height: 52
+                    spacing: 16
+
+                    // Pair Button
+                    Rectangle {
+                        width: (parent.width - 16) / 2
+                        height: parent.height
+                        radius: 4
+                        color: pairBtnMouse.pressed ? "#1B5291" : (pairBtnMouse.containsMouse ? "#2870C2" : "#205FA6")
+                        border.color: "#3CA9F8"
+                        border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Pair"
+                            color: "#FFFFFF"
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                            font.family: "Roboto"
+                        }
+
+                        MouseArea {
+                            id: pairBtnMouse
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                console.log("[Main] User tapped Pair on IVI")
+                                systemController.confirmPairing()
+                            }
+                        }
+                    }
+
+                    // Cancel Button
+                    Rectangle {
+                        width: (parent.width - 16) / 2
+                        height: parent.height
+                        radius: 4
+                        color: cancelPairMouse.pressed ? "#224A75" : (cancelPairMouse.containsMouse ? "#1A3654" : "#132130")
+                        border.color: "#3D5B7D"
+                        border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Cancel"
+                            color: "#FFFFFF"
+                            font.pixelSize: 20
+                            font.weight: Font.DemiBold
+                            font.family: "Roboto"
+                        }
+
+                        MouseArea {
+                            id: cancelPairMouse
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                console.log("[Main] User tapped Cancel on IVI")
+                                systemController.rejectPairing()
                             }
                         }
                     }

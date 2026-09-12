@@ -53,14 +53,29 @@ Developer: Sk Rehan Ahamed
         <file>assets/bluetooth/bt_guide_step5.png</file>
 
         <!-- Phone Icons -->
+        <file>assets/phone/icon_phone_bt.png</file>
         <file>assets/phone/icon_phone_callhistory.png</file>
         <file>assets/phone/icon_phone_phonebook.png</file>
         <file>assets/phone/icon_phone_dialpad.png</file>
         <file>assets/phone/icon_phone_device_switch.png</file>
+        <file>assets/phone/icon_call_private.png</file>
+        <file>assets/phone/icon_call_status_green.png</file>
         <file>assets/phone/icon_phone_green.png</file>
         <file>assets/phone/icon_call_incoming.png</file>
         <file>assets/phone/icon_call_outgoing.png</file>
         <file>assets/phone/icon_call_details.png</file>
+        <file>assets/phone/icon_call_mute.png</file>
+        <file>assets/phone/icon_call_keypad.png</file>
+        <file>assets/phone/icon_call_dialpad_oem.png</file>
+        <file>assets/phone/icon_call_end.png</file>
+        <file>assets/phone/icon_call_add.png</file>
+        <file>assets/phone/icon_call_contacts.png</file>
+        <file>assets/phone/icon_person_avatar.png</file>
+        <file>assets/phone/incoming_call_actions.png</file>
+        <file>assets/phone/call_history_actions.png</file>
+        <file>assets/phone/icon_history_incoming.png</file>
+        <file>assets/phone/icon_history_outgoing.png</file>
+        <file>assets/phone/icon_history_missed.png</file>
 
         <!-- UI & Navigation Icons -->
         <file>assets/ui/icon_home.png</file>
@@ -84,6 +99,13 @@ Developer: Sk Rehan Ahamed
         <file>assets/media/icon_media_carplay.png</file>
         <file>assets/media/icon_media_am.png</file>
         <file>assets/media/media_player_bg.png</file>
+        <file>assets/media/bt_fallback_artwork.png</file>
+        <file>assets/media/scenic_city.jpg</file>
+        <file>assets/media/scenic_city_blur.jpg</file>
+        <file>assets/media/scenic_beach.jpg</file>
+        <file>assets/media/scenic_beach_blur.jpg</file>
+        <file>assets/media/scenic_mountain.jpg</file>
+        <file>assets/media/scenic_mountain_blur.jpg</file>
 
         <!-- Voice Memo Assets -->
         <file>assets/voicememo/icon_clipboard_mic.png</file>
@@ -105,6 +127,7 @@ Developer: Sk Rehan Ahamed
 
         <!-- QML Main -->
         <file>qml/Main.qml</file>
+        <file>qml/components/IncomingCallPopup.qml</file>
 
         <!-- QML Screens -->
         <file>qml/components/screens/HomeScreen.qml</file>
@@ -125,6 +148,7 @@ Developer: Sk Rehan Ahamed
         <file>qml/components/screens/QuietModeScreen.qml</file>
         <file>qml/components/screens/MediaSelectScreen.qml</file>
         <file>qml/components/screens/RadioScreen.qml</file>
+        <file>qml/components/screens/BluetoothAudioScreen.qml</file>
         <file>qml/components/screens/VoiceMemoScreen.qml</file>
         <file>qml/components/screens/DrvmScreen.qml</file>
         <file>qml/components/screens/ApexLoadingScreen.qml</file>

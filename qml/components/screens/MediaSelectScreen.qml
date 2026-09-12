@@ -120,25 +120,25 @@ Rectangle {
                         }
                     }
 
-                    // 4. Android Auto (Inactive / Dim unless connected)
+                    // 4. Android Auto
                     MediaCard {
                         title: "Android Auto"
                         iconSource: "qrc:/assets/media/icon_media_androidauto.png"
-                        isActive: systemController.androidAutoEnabled && systemController.phoneConnected
+                        isActive: true
                         isSelected: false
                         onClicked: {
-                            if (isActive) systemController.triggerProjection()
+                            systemController.triggerProjection()
                         }
                     }
 
-                    // 5. Apple CarPlay (Inactive / Dim unless connected)
+                    // 5. Apple CarPlay
                     MediaCard {
                         title: "Apple CarPlay"
                         iconSource: "qrc:/assets/media/icon_media_carplay.png"
-                        isActive: systemController.appleCarPlayEnabled && systemController.phoneConnected
+                        isActive: true
                         isSelected: false
                         onClicked: {
-                            if (isActive) systemController.triggerProjection()
+                            systemController.triggerProjection()
                         }
                     }
                 }

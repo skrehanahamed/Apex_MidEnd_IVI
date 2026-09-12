@@ -65,7 +65,7 @@ Rectangle {
             case "settings": return "Settings"
             case "projection": return "Projection"
             case "voicememo": return "Voice memo"
-            case "radio": return "Radio"
+            case "radio": return "FM/AM"
             case "drvm": return "DRVM"
             case "quietmode": return "Quiet mode"
             case "manual": return "Manual"
@@ -119,21 +119,6 @@ Rectangle {
                         width: 52
                         height: 52
 
-                        // Soft Light Blue Pressed Glow
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 78
-                            height: 78
-                            radius: 39
-                            color: "#4DC3FF"
-                            opacity: slotMouse.pressed ? 0.55 : 0.0
-                            scale: slotMouse.pressed ? 1.15 : 0.6
-                            border.color: "#99E5FF"
-                            border.width: slotMouse.pressed ? 1.5 : 0
-
-                            Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                            Behavior on scale { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
-                        }
 
                         Image {
                             anchors.fill: parent

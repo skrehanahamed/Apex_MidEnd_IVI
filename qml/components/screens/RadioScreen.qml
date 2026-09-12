@@ -11,7 +11,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    color: "#070C14"
+    color: "#0B1422"
 
     signal backClicked()
     signal manualClicked()
@@ -170,12 +170,23 @@ Rectangle {
     // Genuine OEM Wallpaper for FM/AM Radio Player - flows seamlessly across entire screen
     Image {
         anchors.fill: parent
-        source: "qrc:/assets/media/media_player_bg.png"
+        source: systemController.currentScenicBlurBackground
         fillMode: Image.PreserveAspectCrop
         smooth: true
         asynchronous: true
-        opacity: 0.42
+        opacity: 0.60
         z: 0
+    }
+
+    // Soft illumination gradient overlay
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: Qt.rgba(0.06, 0.12, 0.20, 0.35) }
+            GradientStop { position: 0.5; color: Qt.rgba(0.04, 0.08, 0.15, 0.25) }
+            GradientStop { position: 1.0; color: Qt.rgba(0.02, 0.05, 0.10, 0.50) }
+        }
+        z: 1
     }
 
     ColumnLayout {
@@ -232,7 +243,7 @@ Rectangle {
                               ? "Bluetooth Audio"
                               : ((systemController.selectedMediaSource === "usb")
                                  ? "USB Music"
-                                 : "Radio")
+                                 : "FM/AM")
                         color: "#FFFFFF"
                         font.pixelSize: 24
                         font.weight: Font.DemiBold
@@ -249,6 +260,7 @@ Rectangle {
 
                     // 1. [FM/AM] Band Switch Button (Visible on FM/AM)
                     Rectangle {
+                        id: bandBtn
                         width: 100
                         height: 40
                         visible: (systemController.selectedMediaSource !== "bluetooth" && systemController.selectedMediaSource !== "usb")
@@ -757,14 +769,35 @@ Rectangle {
                         }
                     }
 
-                    // 3. Station Name / RDS program name (Matching Photo 1: "N - JAIL", Photo 2: "SURYAN")
-                    Text {
+                    // 3. Station Name / RDS program name with live buffering/loading indicator
+                    Row {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: root.isHoldSeeking ? ("Seeking " + root.displayFrequency + " MHz...") : systemController.currentStationName
-                        color: root.isHoldSeeking ? "#38B6FF" : "#FFFFFF"
-                        font.pixelSize: 26
-                        font.weight: Font.DemiBold
-                        font.family: "Roboto"
+                        spacing: 8
+
+                        Text {
+                            text: root.isHoldSeeking ? ("Seeking " + root.displayFrequency + " MHz...") : systemController.currentStationName
+                            color: root.isHoldSeeking ? "#38B6FF" : "#FFFFFF"
+                            font.pixelSize: 26
+                            font.weight: Font.DemiBold
+                            font.family: "Roboto"
+                        }
+
+                        // Elegant pulsing indicator dot when tuning/buffering in the background
+                        Rectangle {
+                            width: 9
+                            height: 9
+                            radius: 4.5
+                            color: "#00E5FF"
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: systemController.radioLoading
+
+                            SequentialAnimation on opacity {
+                                running: systemController.radioLoading
+                                loops: Animation.Infinite
+                                NumberAnimation { from: 0.2; to: 1.0; duration: 350; easing.type: Easing.InOutQuad }
+                                NumberAnimation { from: 1.0; to: 0.2; duration: 350; easing.type: Easing.InOutQuad }
+                            }
+                        }
                     }
 
                     // 4. Detailed RDS Info (Song / Artist / Station info) - Controlled by Info Button
@@ -804,7 +837,7 @@ Rectangle {
                     Text {
                         anchors.horizontalCenter: parent.horizontalCenter
                         text: (systemController.selectedMediaSource === "bluetooth")
-                              ? (systemController.hasHandsFreeDevice ? systemController.activeHandsFreeDeviceName : "Connected Device")
+                              ? (systemController.activeHandsFreeDeviceName || systemController.detectedBluetoothName || "Connected Device")
                               : (systemController.usbConnected ? "USB Media Storage" : "No USB Device")
                         color: "#FFFFFF"
                         font.pixelSize: 42
@@ -855,19 +888,21 @@ Rectangle {
                             }
                         }
 
-                        // Play/Pause Button
+                        // Play/Pause Button with live buffering state
                         Rectangle {
                             width: 58
                             height: 58
                             radius: 29
                             color: playPauseBtMouse.pressed ? "#2A4E72" : (playPauseBtMouse.containsMouse ? "#18324E" : "#132235")
-                            border.color: "#389BFF"
+                            border.color: systemController.radioLoading ? "#00E5FF" : "#389BFF"
                             border.width: 1
+                            scale: playPauseBtMouse.pressed ? 0.92 : 1.0
+                            Behavior on scale { NumberAnimation { duration: 80 } }
 
                             Text {
                                 anchors.centerIn: parent
-                                text: systemController.isRadioPlaying ? "⏸" : "▶"
-                                color: "#FFFFFF"
+                                text: systemController.radioLoading ? "⋯" : (systemController.isRadioPlaying ? "⏸" : "▶")
+                                color: systemController.radioLoading ? "#00E5FF" : "#FFFFFF"
                                 font.pixelSize: 26
                             }
 

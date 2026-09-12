@@ -26,7 +26,7 @@ set(CMAKE_AUTOUIC ON)
 add_compile_definitions(APEX_IVI_VERSION_STRING="${APEX_IVI_VERSION_STRING}")
 add_compile_definitions(APEX_IVI_VERSION_RAW="${PROJECT_VERSION}")
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Multimedia)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Multimedia DBus Network)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -51,6 +51,10 @@ add_executable(ApexIVI
     src/main.cpp
     src/SystemController.hpp
     src/SystemController.cpp
+    src/BluezBluetoothManager.hpp
+    src/BluezBluetoothManager.cpp
+    src/PbapSyncManager.hpp
+    src/PbapSyncManager.cpp
     ${PLATFORM_SOURCES}
     resources.qrc
 )
@@ -62,6 +66,8 @@ target_link_libraries(ApexIVI PRIVATE
     Qt6::Qml
     Qt6::QuickControls2
     Qt6::Multimedia
+    Qt6::DBus
+    Qt6::Network
     ${PLATFORM_LIBS}
 )
 
@@ -70,3 +76,6 @@ set_target_properties(ApexIVI PROPERTIES
     OUTPUT_NAME "ApexIVI"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
+
+include(GNUInstallDirs)
+install(TARGETS ApexIVI RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

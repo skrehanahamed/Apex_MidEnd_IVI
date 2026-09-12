@@ -12,6 +12,19 @@
 #include <QString>
 #include <QTimer>
 #include <QDateTime>
+#include <QThread>
+#include <QSet>
+#include <QProcess>
+#include <QRandomGenerator>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFile>
+#include <QDir>
+#include <QStandardPaths>
 
 class QMediaPlayer;
 class QAudioOutput;
@@ -20,6 +33,34 @@ class QAudioInput;
 class QMediaRecorder;
 class QSoundEffect;
 class NativeAudioRecorder;
+class BluezBluetoothManager;
+class PbapSyncManager;
+
+class RadioStreamWorker : public QObject {
+    Q_OBJECT
+public:
+    explicit RadioStreamWorker(QObject *parent = nullptr);
+    ~RadioStreamWorker() override;
+
+public slots:
+    void init();
+    void playStream(const QString &urlStr);
+    void pause();
+    void resume();
+    void stop();
+    void setVolume(float volume);
+    void cleanup();
+
+signals:
+    void playbackStateChanged(bool playing);
+    void mediaStatusChanged(bool loading);
+
+private:
+    QProcess *m_process{nullptr};
+    QString m_currentUrl;
+    float m_volume{0.65f};
+};
+
 
 class SystemController : public QObject {
     Q_OBJECT
@@ -50,6 +91,8 @@ class SystemController : public QObject {
     Q_PROPERTY(QString currentRdsInfo READ currentRdsInfo NOTIFY currentRdsInfoChanged)
     Q_PROPERTY(bool isStationFavorited READ isStationFavorited NOTIFY isStationFavoritedChanged)
     Q_PROPERTY(QVariantList stationList READ stationList NOTIFY stationListChanged)
+    Q_PROPERTY(QString radioServerUrl READ radioServerUrl WRITE setRadioServerUrl NOTIFY radioServerUrlChanged)
+    Q_PROPERTY(bool radioServerOnline READ radioServerOnline NOTIFY radioServerOnlineChanged)
     Q_PROPERTY(bool radioLoading READ radioLoading NOTIFY radioLoadingChanged)
     Q_PROPERTY(bool usbConnected READ usbConnected WRITE setUsbConnected NOTIFY usbConnectedChanged)
     Q_PROPERTY(int currentStationIndex READ currentStationIndex NOTIFY currentStationIndexChanged)
@@ -80,8 +123,46 @@ class SystemController : public QObject {
     Q_PROPERTY(int activeDeviceIndex READ activeDeviceIndex NOTIFY bluetoothDeviceListChanged)
     Q_PROPERTY(bool hasHandsFreeDevice READ hasHandsFreeDevice NOTIFY bluetoothDeviceListChanged)
     Q_PROPERTY(QString activeHandsFreeDeviceName READ activeHandsFreeDeviceName NOTIFY bluetoothDeviceListChanged)
+    Q_PROPERTY(QVariantList callHistory READ callHistory NOTIFY callHistoryChanged)
+    Q_PROPERTY(QVariantList contactsList READ contactsList NOTIFY contactsListChanged)
+    Q_PROPERTY(int contactsCount READ contactsCount NOTIFY contactsCountChanged)
+    Q_PROPERTY(int callHistoryCount READ callHistoryCount NOTIFY callHistoryCountChanged)
+    Q_PROPERTY(bool isSyncingContacts READ isSyncingContacts NOTIFY isSyncingContactsChanged)
+    Q_PROPERTY(int phoneBatteryLevel READ phoneBatteryLevel NOTIFY phoneBatteryLevelChanged)
+    Q_PROPERTY(int phoneSignalLevel READ phoneSignalLevel NOTIFY phoneSignalLevelChanged)
+    Q_PROPERTY(QString cellularCarrierName READ cellularCarrierName NOTIFY cellularCarrierNameChanged)
+    Q_PROPERTY(QString detectedBluetoothName READ detectedBluetoothName NOTIFY detectedBluetoothNameChanged)
+    Q_PROPERTY(bool bluetoothCallActive READ bluetoothCallActive NOTIFY bluetoothCallActiveChanged)
+    Q_PROPERTY(QString bluetoothCallStatus READ bluetoothCallStatus NOTIFY bluetoothCallStatusChanged)
+    Q_PROPERTY(QString bluetoothCallNumber READ bluetoothCallNumber NOTIFY bluetoothCallNumberChanged)
+    Q_PROPERTY(QString bluetoothCallName READ bluetoothCallName NOTIFY bluetoothCallNameChanged)
+
+    // Bluetooth Media Playback & Track Metadata
+    Q_PROPERTY(QString bluetoothTrackTitle READ bluetoothTrackTitle NOTIFY bluetoothTrackChanged)
+    Q_PROPERTY(QString bluetoothTrackArtist READ bluetoothTrackArtist NOTIFY bluetoothTrackChanged)
+    Q_PROPERTY(QString bluetoothTrackAlbum READ bluetoothTrackAlbum NOTIFY bluetoothTrackChanged)
+    Q_PROPERTY(int bluetoothTrackDurationMs READ bluetoothTrackDurationMs NOTIFY bluetoothTrackChanged)
+    Q_PROPERTY(int bluetoothTrackPositionMs READ bluetoothTrackPositionMs NOTIFY bluetoothTrackPositionChanged)
+    Q_PROPERTY(QString bluetoothTrackDurationStr READ bluetoothTrackDurationStr NOTIFY bluetoothTrackChanged)
+    Q_PROPERTY(QString bluetoothTrackPositionStr READ bluetoothTrackPositionStr NOTIFY bluetoothTrackPositionChanged)
+    Q_PROPERTY(QString bluetoothPlaybackStatus READ bluetoothPlaybackStatus NOTIFY bluetoothPlaybackStatusChanged)
+    Q_PROPERTY(QString bluetoothAlbumArtUrl READ bluetoothAlbumArtUrl NOTIFY bluetoothAlbumArtUrlChanged)
+    Q_PROPERTY(QString bluetoothRepeatMode READ bluetoothRepeatMode NOTIFY bluetoothRepeatModeChanged)
+    Q_PROPERTY(bool bluetoothShuffleMode READ bluetoothShuffleMode NOTIFY bluetoothShuffleModeChanged)
+    Q_PROPERTY(QString currentScenicBackground READ currentScenicBackground NOTIFY scenicBackgroundChanged)
+    Q_PROPERTY(QString currentScenicBlurBackground READ currentScenicBlurBackground NOTIFY scenicBackgroundChanged)
+    Q_PROPERTY(QString currentScenicArtwork READ currentScenicArtwork NOTIFY scenicBackgroundChanged)
+    Q_PROPERTY(QVariantList discoveredDeviceList READ discoveredDeviceList NOTIFY discoveredDeviceListChanged)
+    Q_PROPERTY(bool isDiscovering READ isDiscovering NOTIFY discoveryStateChanged)
     Q_PROPERTY(QString vehicleName READ vehicleName WRITE setVehicleName NOTIFY vehicleNameChanged)
     Q_PROPERTY(QString passkey READ passkey WRITE setPasskey NOTIFY passkeyChanged)
+    Q_PROPERTY(bool isPairingPromptActive READ isPairingPromptActive NOTIFY pairingPromptChanged)
+    Q_PROPERTY(QString incomingPairingDeviceName READ incomingPairingDeviceName NOTIFY pairingPromptChanged)
+    Q_PROPERTY(QString incomingPairingPasskey READ incomingPairingPasskey NOTIFY pairingPromptChanged)
+    Q_PROPERTY(QString incomingPairingDeviceMac READ incomingPairingDeviceMac NOTIFY pairingPromptChanged)
+    Q_PROPERTY(bool isConnectingDevice READ isConnectingDevice NOTIFY connectingDeviceChanged)
+    Q_PROPERTY(QString connectingDeviceName READ connectingDeviceName NOTIFY connectingDeviceChanged)
+    Q_PROPERTY(bool isPairingAuthWaiting READ isPairingAuthWaiting NOTIFY pairingAuthWaitingChanged)
     Q_PROPERTY(bool privacyMode READ privacyMode WRITE setPrivacyMode NOTIFY privacyModeChanged)
     Q_PROPERTY(bool androidAutoEnabled READ androidAutoEnabled WRITE setAndroidAutoEnabled NOTIFY androidAutoEnabledChanged)
     Q_PROPERTY(bool appleCarPlayEnabled READ appleCarPlayEnabled WRITE setAppleCarPlayEnabled NOTIFY appleCarPlayEnabledChanged)
@@ -134,6 +215,7 @@ class SystemController : public QObject {
 
 public:
     explicit SystemController(QObject *parent = nullptr);
+    ~SystemController() override;
 
     bool privacyMode() const { return m_privacyMode; }
     Q_INVOKABLE void setPrivacyMode(bool enabled);
@@ -147,7 +229,8 @@ public:
     bool appleCarPlayEnabled() const { return m_appleCarPlayEnabled; }
     Q_INVOKABLE void setAppleCarPlayEnabled(bool enabled);
     Q_INVOKABLE void moveBluetoothDevice(int fromIndex, int toIndex);
-    Q_INVOKABLE void deleteMultipleBluetoothDevices(const QVariantList &indices);
+    Q_INVOKABLE void deleteMultipleBluetoothDevices(const QVariantList &items);
+    Q_INVOKABLE void deleteDeviceByMac(const QString &mac);
 
     // Display Settings
     QString brightnessMode() const { return m_brightnessMode; }
@@ -275,6 +358,10 @@ public:
     QString currentRdsInfo() const { return m_currentRdsInfo; }
     bool isStationFavorited() const { return m_isStationFavorited; }
     QVariantList stationList() const { return m_stationList; }
+    QString radioServerUrl() const { return m_radioServerUrl; }
+    void setRadioServerUrl(const QString &url);
+    bool radioServerOnline() const { return m_radioServerOnline; }
+    Q_INVOKABLE void fetchRadioStations();
     bool radioLoading() const { return m_radioLoading; }
     bool usbConnected() const { return m_usbConnected; }
     void setUsbConnected(bool c);
@@ -305,18 +392,116 @@ public:
     QString selectedProjectionDevice() const { return m_selectedProjectionDevice; }
     QVariantList bluetoothDeviceList() const { return m_bluetoothDeviceList; }
     int activeDeviceIndex() const { return m_activeDeviceIndex; }
+    int phoneBatteryLevel() const { return m_phoneBatteryLevel; }
+    int phoneSignalLevel() const { return m_phoneSignalLevel; }
+    QString cellularCarrierName() const { return m_cellularCarrierName; }
+    Q_INVOKABLE void setPhoneBatteryLevel(int level);
+    Q_INVOKABLE void setPhoneSignalLevel(int level);
     bool hasHandsFreeDevice() const {
         for (const auto &d : m_bluetoothDeviceList) {
-            if (d.toMap()["handsFree"].toBool()) return true;
+            auto map = d.toMap();
+            if (map["connected"].toBool()) {
+                if (!map.contains("handsFree") || map["handsFree"].toBool()) return true;
+            }
         }
         return false;
     }
     QString activeHandsFreeDeviceName() const {
-        for (const auto &d : m_bluetoothDeviceList) {
-            if (d.toMap()["handsFree"].toBool()) return d.toMap()["name"].toString();
+        // The dialer header must describe the same phone that call control,
+        // PBAP and telemetry use.  Do not use list order when multiple
+        // Bluetooth devices are connected.
+        if (m_activeDeviceIndex >= 0 && m_activeDeviceIndex < m_bluetoothDeviceList.size()) {
+            auto active = m_bluetoothDeviceList[m_activeDeviceIndex].toMap();
+            if (active["connected"].toBool() && !active["isInput"].toBool()
+                && (!active.contains("handsFree") || active["handsFree"].toBool())) {
+                return active["name"].toString();
+            }
         }
-        return QString();
+        for (const auto &d : m_bluetoothDeviceList) {
+            auto map = d.toMap();
+            if (map["connected"].toBool() && !map["isInput"].toBool()) {
+                if (!map.contains("handsFree") || map["handsFree"].toBool()) return map["name"].toString();
+            }
+        }
+        return m_detectedBluetoothName;
     }
+    QVariantList callHistory() const { return m_callHistory; }
+    QVariantList contactsList() const { return m_contactsList; }
+    int contactsCount() const { return m_contactsCount; }
+    int callHistoryCount() const { return m_callHistoryCount; }
+    bool isSyncingContacts() const { return m_isSyncingContacts; }
+    QString detectedBluetoothName() const { return m_detectedBluetoothName; }
+    bool bluetoothCallActive() const { return m_bluetoothCallActive; }
+    QString bluetoothCallStatus() const { return m_bluetoothCallStatus; }
+    QString bluetoothCallNumber() const { return m_bluetoothCallNumber; }
+    QString bluetoothCallName() const { return m_bluetoothCallName; }
+    Q_INVOKABLE void pollBluetoothCallState();
+    Q_INVOKABLE void refreshBluetoothDevices();
+    Q_INVOKABLE void refreshPhonebookData();
+    Q_INVOKABLE int getFirstContactIndexForLetter(const QString &letter);
+    Q_INVOKABLE void dialNumber(const QString &number);
+    Q_INVOKABLE void hangUpCall();
+    Q_INVOKABLE void answerCall();
+    Q_INVOKABLE void sendQuickReply(const QString &number, const QString &message);
+    Q_INVOKABLE void sendDtmf(const QString &digit);
+    Q_INVOKABLE void setCallMuted(bool mute);
+    Q_INVOKABLE void syncBluetoothContacts();
+    Q_INVOKABLE void syncRecentCallHistory();
+    Q_INVOKABLE void recordCallToHistory(const QString &number, const QString &name = QString(), bool isIncoming = false);
+
+    // Bluetooth Media Playback & Track Metadata
+    QString bluetoothTrackTitle() const { return m_bluetoothTrackTitle; }
+    QString bluetoothTrackArtist() const { return m_bluetoothTrackArtist; }
+    QString bluetoothTrackAlbum() const { return m_bluetoothTrackAlbum; }
+    int bluetoothTrackDurationMs() const { return m_bluetoothTrackDurationMs; }
+    int bluetoothTrackPositionMs() const { return m_bluetoothTrackPositionMs; }
+    QString bluetoothTrackDurationStr() const {
+        int sec = m_bluetoothTrackDurationMs / 1000;
+        return QString("%1:%2").arg(sec / 60).arg(sec % 60, 2, 10, QChar('0'));
+    }
+    QString bluetoothTrackPositionStr() const {
+        int sec = m_bluetoothTrackPositionMs / 1000;
+        return QString("%1:%2").arg(sec / 60).arg(sec % 60, 2, 10, QChar('0'));
+    }
+    QString bluetoothPlaybackStatus() const { return m_bluetoothPlaybackStatus; }
+    QString bluetoothAlbumArtUrl() const { return m_bluetoothAlbumArtUrl; }
+    QString bluetoothRepeatMode() const { return m_bluetoothRepeatMode; }
+    bool bluetoothShuffleMode() const { return m_bluetoothShuffleMode; }
+    QString currentScenicBackground() const {
+        static const QStringList bgs = {
+            "qrc:/assets/media/scenic_city.jpg",
+            "qrc:/assets/media/scenic_beach.jpg",
+            "qrc:/assets/media/scenic_mountain.jpg"
+        };
+        return bgs.value(qAbs(m_scenicIndex) % bgs.size(), bgs[0]);
+    }
+    QString currentScenicBlurBackground() const {
+        static const QStringList blurBgs = {
+            "qrc:/assets/media/scenic_city_blur.jpg",
+            "qrc:/assets/media/scenic_beach_blur.jpg",
+            "qrc:/assets/media/scenic_mountain_blur.jpg"
+        };
+        return blurBgs.value(qAbs(m_scenicIndex) % blurBgs.size(), blurBgs[0]);
+    }
+    QString currentScenicArtwork() const {
+        return currentScenicBackground();
+    }
+    Q_INVOKABLE void cycleRandomScenicBackground() {
+        int next = (m_scenicIndex + 1 + (QRandomGenerator::global()->generate() % 2)) % 3;
+        if (next == m_scenicIndex) next = (m_scenicIndex + 1) % 3;
+        m_scenicIndex = next;
+        emit scenicBackgroundChanged();
+    }
+
+    Q_INVOKABLE void bluetoothMediaPlay();
+    Q_INVOKABLE void bluetoothMediaPause();
+    Q_INVOKABLE void toggleBluetoothMediaPlayback();
+    Q_INVOKABLE void bluetoothMediaNext();
+    Q_INVOKABLE void bluetoothMediaPrevious();
+    Q_INVOKABLE void toggleBluetoothRepeat();
+    Q_INVOKABLE void toggleBluetoothShuffle();
+    Q_INVOKABLE void seekBluetoothTrackPosition(int positionMs);
+    Q_INVOKABLE void fetchAlbumArt(const QString &title, const QString &artist);
 
     void setCurrentScreen(const QString &screen);
     void setBluetoothConnected(bool connected);
@@ -348,10 +533,34 @@ public:
     Q_INVOKABLE void addDevice(const QString &name, bool handsFree, bool audio);
     Q_INVOKABLE void deactivateHandsFree(int index);
     Q_INVOKABLE void setDevicePreferences(int index, bool handsFree, bool audio);
+    Q_INVOKABLE void setDevicePreferencesForMac(const QString &mac, bool handsFree, bool audio);
     Q_INVOKABLE void toggleDeviceHandsFree(int index);
     Q_INVOKABLE void toggleDeviceAudio(int index);
     Q_INVOKABLE void removeDevice(int index);
     Q_INVOKABLE void connectDevice(int index);
+    Q_INVOKABLE void disconnectDevice(int index);
+
+    // Bluetooth Discovery & Add Device Methods
+    QVariantList discoveredDeviceList() const;
+    bool isDiscovering() const;
+    Q_INVOKABLE void startDiscovery();
+    Q_INVOKABLE void stopDiscovery();
+    Q_INVOKABLE void pairAndConnectDevice(const QString &mac);
+    Q_INVOKABLE QString primaryConnectedPhoneMac() const;
+    Q_INVOKABLE void updatePrimaryPhoneTelemetry(bool forceSync = false);
+
+    bool isPairingPromptActive() const { return m_isPairingPromptActive; }
+    QString incomingPairingDeviceName() const { return m_incomingPairingDeviceName; }
+    QString incomingPairingPasskey() const { return m_incomingPairingPasskey; }
+    QString incomingPairingDeviceMac() const { return m_incomingPairingDeviceMac; }
+    bool isConnectingDevice() const { return m_isConnectingDevice; }
+    QString connectingDeviceName() const { return m_connectingDeviceName; }
+    bool isPairingAuthWaiting() const { return m_isPairingAuthWaiting; }
+    Q_INVOKABLE void confirmPairing();
+    Q_INVOKABLE void rejectPairing();
+    Q_INVOKABLE void cancelPairing();
+    Q_INVOKABLE void setBluetoothDiscoverable(bool discoverable);
+    Q_INVOKABLE void cancelConnectingDevice();
     Q_INVOKABLE void selectWidgetForSide(const QString &side, const QString &widgetType);
     Q_INVOKABLE void resetWidgetsToDefault();
     Q_INVOKABLE void openWidgetEditor(const QString &side);
@@ -422,6 +631,36 @@ signals:
     void phoneConnectionChanged();
     void bluetoothConnectionChanged();
     void bluetoothDeviceListChanged();
+    void devicePairedSuccessfully(const QString &mac, const QString &name);
+    void deviceConnecting(const QString &name, const QString &mac);
+    void deviceDisconnected(const QString &mac, const QString &name);
+    void connectingDeviceChanged();
+    void pairingAuthWaitingChanged();
+    void pairingAuthenticationWaiting(const QString &name, const QString &passkey);
+    void callHistoryChanged();
+    void contactsListChanged();
+    void contactsCountChanged();
+    void callHistoryCountChanged();
+    void isSyncingContactsChanged();
+    void phoneBatteryLevelChanged();
+    void phoneSignalLevelChanged();
+    void cellularCarrierNameChanged();
+    void detectedBluetoothNameChanged();
+    void bluetoothCallActiveChanged();
+    void bluetoothCallStatusChanged();
+    void bluetoothCallNumberChanged();
+    void bluetoothCallNameChanged();
+    void bluetoothTrackChanged();
+    void bluetoothTrackPositionChanged();
+    void bluetoothPlaybackStatusChanged();
+    void bluetoothAlbumArtUrlChanged();
+    void bluetoothRepeatModeChanged();
+    void bluetoothShuffleModeChanged();
+    void scenicBackgroundChanged();
+    void remoteCallStarted(const QString &name, const QString &number, const QString &status);
+    void remoteCallStatusChanged(const QString &status);
+    void remoteCallEnded();
+    void quickReplyFinished(bool success, const QString &message);
     void widgetsChanged();
     void editingWidgetSideChanged();
     void dockIconsChanged();
@@ -447,19 +686,44 @@ signals:
     void currentRdsInfoChanged();
     void isStationFavoritedChanged();
     void stationListChanged();
+    void radioServerUrlChanged();
+    void radioServerOnlineChanged();
     void radioLoadingChanged();
     void usbConnectedChanged();
     void currentStationIndexChanged();
     void reverseGearChanged();
     void volumeChanged();
+    void pairingPromptChanged();
+    void discoveredDeviceListChanged();
+    void discoveryStateChanged();
 
 private slots:
     void updateDateTime();
     void onInactivityTimeout();
     void startRadioStream();
+    void onBtAgentOutput();
 
 private:
     void saveBluetoothDeviceList();
+    QString getMacForDeviceName(const QString &name);
+    void acquireCallAudioFocus();
+    void releaseCallAudioFocus();
+    void setBluetoothMediaPlayback(bool play);
+    BluezBluetoothManager *m_bluezManager{nullptr};
+    bool m_isPairingPromptActive{false};
+    bool m_isPairingAuthWaiting{false};
+    QString m_incomingPairingDeviceName;
+    QString m_incomingPairingPasskey;
+    QString m_incomingPairingDeviceMac;
+    bool m_isConnectingDevice{false};
+    QString m_connectingDeviceName;
+    QString m_connectingDeviceMac;
+    QString m_lastPairedSuccessMac;
+    qint64 m_lastPairedSuccessTime{0};
+    QSet<QString> m_recentlyRemovedMacs;
+    QString m_lastSyncedPhoneMac;
+    QString m_signalTelemetryPhoneMac;
+    QProcess *m_btAgentProc{nullptr};
 
 #ifdef APEX_IVI_VERSION_STRING
     QString m_appVersion{APEX_IVI_VERSION_STRING};
@@ -522,9 +786,62 @@ private:
     bool m_radioPlaying{false};
     QString m_radioStation{"93.5"};
     bool m_phoneConnected{false};
-    bool m_bluetoothConnected{true};
+    bool m_bluetoothConnected{false};
     QVariantList m_bluetoothDeviceList;
     int m_activeDeviceIndex{0};
+    QVariantList m_callHistory;
+    QVariantList m_contactsList;
+    int m_contactsCount{0};
+    int m_callHistoryCount{0};
+    bool m_isSyncingContacts{false};
+    PbapSyncManager *m_pbapManager{nullptr};
+    QString m_detectedBluetoothName{""};
+    bool m_bluetoothCallActive{false};
+    QString m_bluetoothCallStatus{"idle"};
+    QString m_bluetoothCallNumber{""};
+    QString m_bluetoothCallName{""};
+    QTimer *m_callMonitorTimer{nullptr};
+    QTimer *m_callHistoryAutoRefreshTimer{nullptr};
+    bool m_isCheckingCallState{false};
+    bool m_hangupInProgress{false};
+    qint64 m_lastHangupTimestamp{0};
+    bool m_currentCallWasIncoming{false};
+    bool m_currentCallWasAnswered{false};
+    QString m_currentTrackedCallNumber;
+    QVariantList m_localCallHistoryPending;
+    qint64 m_dialStartedTimestamp{0};
+    int m_noCallCount{0};
+    bool m_callAudioFocusActive{false};
+    bool m_resumeRadioAfterCall{false};
+    bool m_resumeVoiceMemoAfterCall{false};
+    bool m_resumeBluetoothMediaAfterCall{false};
+    QString m_bluetoothTrackTitle{""};
+    QString m_bluetoothTrackArtist{""};
+    QString m_bluetoothTrackAlbum{""};
+    int m_bluetoothTrackDurationMs{0};
+    int m_bluetoothTrackPositionMs{0};
+    QString m_bluetoothPlaybackStatus{"stopped"};
+    QString m_bluetoothAlbumArtUrl{""};
+    QString m_bluetoothRepeatMode{"off"};
+    bool m_bluetoothShuffleMode{false};
+    int m_scenicIndex{0};
+    mutable QString m_cachedPlayerPath{""};
+    QTimer *m_bluetoothMediaProgressTimer{nullptr};
+    QTimer *m_bluetoothMediaMonitorTimer{nullptr};
+    bool m_btPollProcActive{false};
+    int m_albumArtFlip{0};
+    bool m_bluetoothAutoPlayInhibited{true};
+    // Timestamp (ms since epoch) of the last Play/Pause/Next/Previous command.
+    // The media poll skips status overwrite for 3 s after a command so the
+    // AVRCP round-trip (200–800 ms on Bluetooth) cannot flip the optimistic UI
+    // state back before the phone has processed the command.
+    qint64 m_lastMediaCommandMs{0};
+    QString resolveBluetoothPlayerPath() const;
+    void pollBluetoothMediaPlayer();
+    void updateBluetoothAlbumArt(const QString &title, const QString &artist);
+    void parseCallStateOutput(const QString &output);
+    void finalizeTrackedCallHistory();
+    void scheduleCallHistoryRefresh();
     QString m_leftWidget{"clock"};
     QString m_rightWidget{"phone_projection"};
     QString m_editingWidgetSide{"right"};
@@ -552,8 +869,9 @@ private:
     QTimer *m_timer{nullptr};
     QTimer *m_inactivityTimer{nullptr};
     QTimer *m_radioTuneTimer{nullptr};
-    QMediaPlayer *m_player{nullptr};
-    QAudioOutput *m_audioOutput{nullptr};
+    QTimer *m_btMonitorTimer{nullptr};
+    QThread *m_radioThread{nullptr};
+    RadioStreamWorker *m_radioWorker{nullptr};
     QString m_selectedMediaSource{"none"};
     QString m_radioBand{"FM"};
     QString m_currentStationName{"SURYAN"};
@@ -563,6 +881,13 @@ private:
     bool m_usbConnected{false};
     int m_currentStationIndex{2};
     QVariantList m_stationList;
+    QNetworkAccessManager *m_networkManager{nullptr};
+    QString m_radioServerUrl{"http://127.0.0.1:8080/radio/stations.json"};
+    bool m_radioServerOnline{false};
+    QTimer *m_radioServerPollTimer{nullptr};
+    void parseRadioStationsJson(const QByteArray &jsonData);
+    void loadCachedRadioStations();
+    void saveCachedRadioStations(const QByteArray &jsonData);
     bool m_isVoiceRecording{false};
     bool m_isVoiceRecordingPaused{false};
     int m_recordingSeconds{0};
@@ -584,4 +909,7 @@ private:
     QSoundEffect *m_startChime{nullptr};
     QSoundEffect *m_stopChime{nullptr};
     NativeAudioRecorder *m_nativeRecorder{nullptr};
+    int m_phoneBatteryLevel{0};
+    int m_phoneSignalLevel{0};
+    QString m_cellularCarrierName;
 };

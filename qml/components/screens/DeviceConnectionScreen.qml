@@ -933,78 +933,179 @@ Rectangle {
             visible: root.currentView === "priority"
 
             ListView {
+                id: priorityListView
                 anchors.fill: parent
                 clip: true
                 model: systemController.bluetoothDeviceList
+                interactive: draggedIndex === -1
 
-                delegate: Rectangle {
-                    width: parent ? parent.width : 0
+                property int draggedIndex: -1
+                property real dragYOffset: 0
+
+                delegate: Item {
+                    id: pDelegateRoot
+                    width: priorityListView.width
                     height: 76
-                    color: pRowMouse.pressed ? Qt.rgba(0.25, 0.72, 1.0, 0.15) : (pRowMouse.containsMouse ? Qt.rgba(0.25, 0.72, 1.0, 0.06) : "transparent")
+                    z: isBeingDragged ? 100 : 1
 
                     readonly property int itemIndex: index
                     readonly property var devData: modelData
+                    readonly property bool isBeingDragged: priorityListView.draggedIndex === itemIndex
 
-                    Row {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 36
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 36
-
-                        // Priority Number (1, 2, 3...)
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: (itemIndex + 1).toString()
-                            color: "#FFFFFF"
-                            font.pixelSize: 24
-                            font.weight: Font.DemiBold
-                            font.family: "Roboto"
-                        }
-
-                        // Device Name (White font matching Photo 2!)
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: devData.name || "Bluetooth Device"
-                            color: "#FFFFFF"
-                            font.pixelSize: 24
-                            font.weight: Font.DemiBold
-                            font.family: "Roboto"
-                        }
+                    // Calculate the current target index based on drag position
+                    readonly property int targetSlot: {
+                        if (priorityListView.draggedIndex === -1) return itemIndex
+                        return Math.max(0, Math.min(priorityListView.count - 1,
+                            priorityListView.draggedIndex + Math.round(priorityListView.dragYOffset / pDelegateRoot.height)))
                     }
 
-                    // Reorder Handle: 3 horizontal bars (☰)
-                    Column {
-                        anchors.right: parent.right
-                        anchors.rightMargin: 48
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 4
-
-                        Rectangle { width: 24; height: 2.5; radius: 1; color: "#FFFFFF" }
-                        Rectangle { width: 24; height: 2.5; radius: 1; color: "#FFFFFF" }
-                        Rectangle { width: 24; height: 2.5; radius: 1; color: "#FFFFFF" }
+                    // The display number: 1, 2, 3...
+                    readonly property int displayNumber: {
+                        if (priorityListView.draggedIndex === -1) return itemIndex + 1
+                        if (isBeingDragged) return targetSlot + 1
+                        if (priorityListView.draggedIndex < targetSlot) {
+                            if (itemIndex > priorityListView.draggedIndex && itemIndex <= targetSlot) return itemIndex
+                        } else if (priorityListView.draggedIndex > targetSlot) {
+                            if (itemIndex >= targetSlot && itemIndex < priorityListView.draggedIndex) return itemIndex + 2
+                        }
+                        return itemIndex + 1
                     }
 
-                    // Bottom divider line
                     Rectangle {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 36
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: 1
-                        color: "#181D26"
+                        id: rowContainer
+                        width: parent.width
+                        height: parent.height
+
+                        onYChanged: {
+                            if (pDelegateRoot.isBeingDragged) {
+                                priorityListView.dragYOffset = rowContainer.y
+                            }
+                        }
+
+                        // Calculate smooth visual shift for other rows while one row is being dragged
+                        readonly property real displacementY: {
+                            if (isBeingDragged || priorityListView.draggedIndex === -1) return 0
+                            if (priorityListView.draggedIndex < targetSlot) {
+                                if (itemIndex > priorityListView.draggedIndex && itemIndex <= targetSlot) {
+                                    return -pDelegateRoot.height
+                                }
+                            } else if (priorityListView.draggedIndex > targetSlot) {
+                                if (itemIndex >= targetSlot && itemIndex < priorityListView.draggedIndex) {
+                                    return pDelegateRoot.height
+                                }
+                            }
+                            return 0
+                        }
+
+                        transform: Translate {
+                            y: (!pDelegateRoot.isBeingDragged && priorityListView.draggedIndex !== -1) ? rowContainer.displacementY : 0
+                            Behavior on y {
+                                NumberAnimation { duration: 150; easing.type: Easing.OutQuad }
+                            }
+                        }
+
+                        color: isBeingDragged ? "#152438" : (rowHover.containsMouse ? Qt.rgba(0.25, 0.72, 1.0, 0.06) : "transparent")
+                        border.color: isBeingDragged ? "#389BFF" : "transparent"
+                        border.width: isBeingDragged ? 1 : 0
+
+                        Behavior on color { ColorAnimation { duration: 80 } }
+
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 36
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 36
+
+                            // Number (1, 2, 3...)
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: pDelegateRoot.displayNumber.toString()
+                                color: "#FFFFFF"
+                                font.pixelSize: 24
+                                font.weight: Font.DemiBold
+                                font.family: "Roboto"
+                            }
+
+                            // Device Name
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: (devData && devData.name) ? devData.name : "Bluetooth Device"
+                                color: "#FFFFFF"
+                                font.pixelSize: 24
+                                font.weight: Font.DemiBold
+                                font.family: "Roboto"
+                            }
+                        }
+
+                        // Reorder Handle: 3 horizontal bars (☰)
+                        Column {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 48
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 4
+
+                            Rectangle { width: 24; height: 2.5; radius: 1; color: isBeingDragged ? "#70D6FF" : "#FFFFFF" }
+                            Rectangle { width: 24; height: 2.5; radius: 1; color: isBeingDragged ? "#70D6FF" : "#FFFFFF" }
+                            Rectangle { width: 24; height: 2.5; radius: 1; color: isBeingDragged ? "#70D6FF" : "#FFFFFF" }
+                        }
+
+                        // Bottom divider line
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 36
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            height: 1
+                            color: "#181D26"
+                        }
                     }
 
                     MouseArea {
-                        id: pRowMouse
+                        id: rowHover
                         anchors.fill: parent
                         hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            // Tapping promotes item if not top, or moves it
-                            if (itemIndex > 0) {
-                                console.log("[DeviceConnection] Promoting device priority:", itemIndex)
-                                systemController.moveBluetoothDevice(itemIndex, itemIndex - 1)
+                        acceptedButtons: Qt.NoButton
+                    }
+
+                    MouseArea {
+                        id: dragMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                        drag.target: rowContainer
+                        drag.axis: Drag.YAxis
+                        drag.minimumY: -itemIndex * pDelegateRoot.height
+                        drag.maximumY: (priorityListView.count - 1 - itemIndex) * pDelegateRoot.height
+
+                        onPressed: {
+                            priorityListView.draggedIndex = itemIndex
+                            priorityListView.dragYOffset = 0
+                        }
+
+                        onPositionChanged: {
+                            if (drag.active && isBeingDragged) {
+                                priorityListView.dragYOffset = rowContainer.y
                             }
+                        }
+
+                        onReleased: {
+                            if (priorityListView.draggedIndex !== -1) {
+                                var fromIdx = priorityListView.draggedIndex
+                                var toIdx = targetSlot
+                                priorityListView.draggedIndex = -1
+                                priorityListView.dragYOffset = 0
+                                rowContainer.y = 0
+                                if (toIdx !== fromIdx) {
+                                    console.log("[Priority] Reordering device from", fromIdx, "to", toIdx)
+                                    systemController.moveBluetoothDevice(fromIdx, toIdx)
+                                }
+                            }
+                        }
+
+                        onCanceled: {
+                            priorityListView.draggedIndex = -1
+                            priorityListView.dragYOffset = 0
+                            rowContainer.y = 0
                         }
                     }
                 }

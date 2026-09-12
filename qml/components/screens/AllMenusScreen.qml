@@ -199,18 +199,6 @@ Rectangle {
                         width: 64
                         height: 64
 
-                        // Soft automotive backlight glow on press
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 72
-                            height: 72
-                            radius: 36
-                            color: "#1E88E5"
-                            opacity: cardRoot.isPressed ? 0.35 : 0.0
-                            scale: cardRoot.isPressed ? 1.05 : 0.85
-                            Behavior on opacity { NumberAnimation { duration: 100 } }
-                            Behavior on scale { NumberAnimation { duration: 120; easing.type: Easing.OutQuad } }
-                        }
 
                         Image {
                             anchors.fill: parent
@@ -324,10 +312,10 @@ Rectangle {
                         }
 
                         MenuAppCard {
-                            title: "Radio"
+                            title: "FM/AM"
                             iconSrc: "qrc:/assets/apps/icon_all_radio.png"
                             onClicked: {
-                                console.log("[AllMenus] Radio clicked")
+                                console.log("[AllMenus] FM/AM clicked")
                                 root.radioClicked()
                             }
                         }
@@ -402,6 +390,24 @@ Rectangle {
                             onClicked: {
                                 console.log("[AllMenus] Manual clicked -> Opening Manual screen")
                                 root.manualClicked()
+                            }
+                        }
+
+                        MenuAppCard {
+                            title: "Android Auto"
+                            iconSrc: "qrc:/assets/media/icon_media_androidauto.png"
+                            onClicked: {
+                                console.log("[AllMenus] Android Auto clicked")
+                                systemController.triggerProjection()
+                            }
+                        }
+
+                        MenuAppCard {
+                            title: "Apple CarPlay"
+                            iconSrc: "qrc:/assets/media/icon_media_carplay.png"
+                            onClicked: {
+                                console.log("[AllMenus] Apple CarPlay clicked")
+                                systemController.triggerProjection()
                             }
                         }
                     }

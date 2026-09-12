@@ -9,6 +9,7 @@
 #include "SystemController.hpp"
 #include <QDebug>
 #include <QSettings>
+#include <QProcess>
 #include <QMediaPlayer>
 #include <QAudioOutput>
 #include <QMediaCaptureSession>
@@ -20,7 +21,18 @@
 #include <QStandardPaths>
 #include <QFileInfo>
 #include <QFile>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusObjectPath>
+#include <QDBusVariant>
+#include <QDBusPendingCallWatcher>
+#include <QDBusPendingReply>
+#include <QDBusArgument>
+#include <QUuid>
 #include "NativeAudioRecorder.h"
+#include "BluezBluetoothManager.hpp"
+#include "PbapSyncManager.hpp"
+#include <QRegularExpression>
 #include <cmath>
 
 static void generateFallbackMemoAudio(const QString &filePath, int durationSec) {
@@ -68,17 +80,118 @@ static void generateFallbackMemoAudio(const QString &filePath, int durationSec) 
     f.close();
 }
 
+// ============================================================================
+// RadioStreamWorker - Background Audio Streaming Engine (Decoupled from GUI)
+// ============================================================================
+RadioStreamWorker::RadioStreamWorker(QObject *parent)
+    : QObject(parent)
+{
+}
+
+RadioStreamWorker::~RadioStreamWorker()
+{
+    cleanup();
+}
+
+void RadioStreamWorker::init()
+{
+}
+
+void RadioStreamWorker::playStream(const QString &urlStr)
+{
+    if (urlStr.isEmpty()) {
+        stop();
+        return;
+    }
+
+    stop();
+    m_currentUrl = urlStr;
+    emit mediaStatusChanged(true);
+
+    m_process = new QProcess(this);
+    QStringList args;
+    args << urlStr << "--audiosink=bin.( audioconvert ! audioresample ! pipewiresink )";
+
+    connect(m_process, &QProcess::started, this, [this]() {
+        emit mediaStatusChanged(false);
+        emit playbackStateChanged(true);
+    });
+
+    connect(m_process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this, [this](int, QProcess::ExitStatus) {
+        emit playbackStateChanged(false);
+        emit mediaStatusChanged(false);
+    });
+
+    m_process->start("gst-play-1.0", args);
+    qDebug() << "[RadioStreamWorker] Background audio streaming started via PipeWire sink:" << urlStr;
+}
+
+void RadioStreamWorker::pause()
+{
+    stop();
+}
+
+void RadioStreamWorker::resume()
+{
+    if (!m_currentUrl.isEmpty()) {
+        playStream(m_currentUrl);
+    }
+}
+
+void RadioStreamWorker::stop()
+{
+    if (m_process) {
+        if (m_process->state() != QProcess::NotRunning) {
+            m_process->terminate();
+            if (!m_process->waitForFinished(300)) {
+                m_process->kill();
+                m_process->waitForFinished(300);
+            }
+        }
+        delete m_process;
+        m_process = nullptr;
+    }
+    emit playbackStateChanged(false);
+    emit mediaStatusChanged(false);
+}
+
+void RadioStreamWorker::setVolume(float volume)
+{
+    m_volume = volume;
+}
+
+void RadioStreamWorker::cleanup()
+{
+    stop();
+}
+
 SystemController::SystemController(QObject *parent)
     : QObject(parent),
       m_timer(new QTimer(this))
+
 {
     // Load persisted settings
     QSettings settings("Apex", "IVI");
-    m_vehicleName = settings.value("bluetooth/vehicleName", "Apex MidEnd").toString();
-    if (m_vehicleName.compare("Exter", Qt::CaseInsensitive) == 0) {
-        m_vehicleName = "Apex MidEnd";
+    m_vehicleName = settings.value("bluetooth/vehicleName", "APEX IVI").toString();
+    if (m_vehicleName.compare("Exter", Qt::CaseInsensitive) == 0 ||
+        m_vehicleName.compare("Apex MidEnd", Qt::CaseInsensitive) == 0) {
+        m_vehicleName = "APEX IVI";
         settings.setValue("bluetooth/vehicleName", m_vehicleName);
     }
+    // Ensure Bluetooth radio is powered on, baseband EIR name, Class of Device (Hands-free Car Audio), Inquiry/Page scan, and BlueZ alias
+    QString machineInfoCmd = QString("echo 'PRETTY_HOSTNAME=\"%1\"' > /etc/machine-info 2>/dev/null").arg(m_vehicleName);
+    QProcess::startDetached("sh", QStringList() << "-c" << machineInfoCmd);
+    QProcess::startDetached("hciconfig", QStringList() << "hci0" << "up");
+    QProcess::startDetached("hciconfig", QStringList() << "hci0" << "name" << m_vehicleName);
+    QProcess::startDetached("hciconfig", QStringList() << "hci0" << "class" << "0x2c0408");
+    QProcess::startDetached("hciconfig", QStringList() << "hci0" << "piscan");
+    QProcess::startDetached("bluetoothctl", QStringList() << "power" << "on");
+    QProcess::startDetached("bluetoothctl", QStringList() << "system-alias" << m_vehicleName);
+    QProcess::startDetached("bluetoothctl", QStringList() << "discoverable" << "on");
+    QProcess::startDetached("bluetoothctl", QStringList() << "pairable" << "on");
+    QProcess::startDetached("bluetoothctl", QStringList() << "discoverable-timeout" << "0");
+    // Purge any legacy deletedMacs blacklist from config
+    settings.remove("bluetooth/deletedMacs");
     m_passkey = settings.value("bluetooth/passkey", "0000").toString();
     m_privacyMode = settings.value("privacy/privacyMode", false).toBool();
     m_androidAutoEnabled = settings.value("connectivity/androidAuto", true).toBool();
@@ -124,75 +237,345 @@ SystemController::SystemController(QObject *parent)
     connect(m_timer, &QTimer::timeout, this, &SystemController::updateDateTime);
     m_timer->start(1000);
 
-    // 20-second user inactivity timer for screensaver
+    // 3-minute user inactivity timer for screensaver (prevent aggressive screen blanking)
     m_inactivityTimer = new QTimer(this);
-    m_inactivityTimer->setInterval(20000);
+    m_inactivityTimer->setInterval(180000);
     m_inactivityTimer->setSingleShot(true);
     connect(m_inactivityTimer, &QTimer::timeout, this, &SystemController::onInactivityTimeout);
 
-    // Load or initialize default connected device matching user's IVI
-    if (settings.contains("bluetooth/deviceList")) {
-        m_bluetoothDeviceList = settings.value("bluetooth/deviceList").toList();
-    }
-    bool needsDefaults = m_bluetoothDeviceList.isEmpty();
-    if (!needsDefaults && m_bluetoothDeviceList.size() == 1) {
-        if (m_bluetoothDeviceList[0].toMap()["name"].toString() == "Redmi Note 13 Pro 5G") {
-            needsDefaults = true;
+    // Restore persisted Bluetooth device list to maintain custom user priority order across reboots
+    QVariant savedDevices = settings.value("bluetooth/deviceList");
+    if (savedDevices.isValid() && !savedDevices.toList().isEmpty()) {
+        QVariantList filtered;
+        for (const auto &item : savedDevices.toList()) {
+            QVariantMap map = item.toMap();
+            QString name = map["name"].toString().toLower();
+            if (name.contains("pebble") || name.contains("mouse") || name.contains("keyboard")) continue;
+            filtered.append(item);
         }
+        m_bluetoothDeviceList = filtered;
+        qDebug() << "[Apex IVI] Restored" << m_bluetoothDeviceList.size() << "paired Bluetooth devices from persistent storage.";
     }
-    if (needsDefaults) {
-        m_bluetoothDeviceList.clear();
-        QVariantMap dev1;
-        dev1["name"] = "Redmi Note 10";
-        dev1["handsFree"] = true;
-        dev1["audio"] = true;
-        dev1["connected"] = true;
-        m_bluetoothDeviceList.append(dev1);
 
-        QVariantMap dev2;
-        dev2["name"] = "vivo T1 5G";
-        dev2["handsFree"] = false;
-        dev2["audio"] = false;
-        dev2["connected"] = false;
-        m_bluetoothDeviceList.append(dev2);
+    // Initialize Native BlueZ D-Bus Bluetooth Manager (Automotive Infotainment Standard)
+    m_bluezManager = new BluezBluetoothManager(this);
+    m_bluezManager->setPasskey(m_passkey);
+    m_bluezManager->init();
+    m_bluezManager->setAdapterName(m_vehicleName);
 
-        QVariantMap dev3;
-        dev3["name"] = "vivo V29 Pro";
-        dev3["handsFree"] = false;
-        dev3["audio"] = false;
-        dev3["connected"] = false;
-        m_bluetoothDeviceList.append(dev3);
+    connect(m_bluezManager, &BluezBluetoothManager::pairingConfirmationRequested, this,
+        [this](const QString &mac, const QString &name, const QString &passkey) {
+            reportActivity();
+            m_incomingPairingDeviceMac = mac;
+            m_incomingPairingDeviceName = name.isEmpty() ? "Mobile Device" : name;
+            m_incomingPairingPasskey = passkey;
+            m_isPairingPromptActive = false;
+            m_connectingDeviceName = m_incomingPairingDeviceName;
+            m_connectingDeviceMac = mac;
+            m_isPairingAuthWaiting = true;
+            m_isConnectingDevice = false;
+            emit pairingPromptChanged();
+            emit pairingAuthWaitingChanged();
+            emit connectingDeviceChanged();
+            emit pairingAuthenticationWaiting(m_incomingPairingDeviceName, passkey);
+            qDebug() << "[Apex IVI] Passkey waiting for mobile authentication:" << m_incomingPairingDeviceName << mac << "Passkey:" << passkey;
+        });
 
-        saveBluetoothDeviceList();
-    }
-    m_activeDeviceIndex = m_bluetoothDeviceList.isEmpty() ? -1 : 0;
+    connect(m_bluezManager, &BluezBluetoothManager::pairingAuthenticated, this,
+        [this](const QString &mac) {
+            Q_UNUSED(mac);
+            qDebug() << "[Apex IVI] Passkey accepted by mobile phone, switching to connecting state:" << m_connectingDeviceName;
+            m_isPairingAuthWaiting = false;
+            m_isConnectingDevice = true;
+            emit pairingAuthWaitingChanged();
+            emit connectingDeviceChanged();
+            emit deviceConnecting(m_connectingDeviceName, m_connectingDeviceMac);
+        });
 
-    // Initialize Native Qt Multimedia Audio Player for Live Radio Streaming
-    m_player = new QMediaPlayer(this);
-    m_audioOutput = new QAudioOutput(this);
-    m_player->setAudioOutput(m_audioOutput);
-    // Initial volume matching default level 29 out of 45 with perceptual curve
-    float initialNorm = 29.0f / 45.0f;
-    m_audioOutput->setVolume(std::clamp(initialNorm * 0.30f + std::pow(initialNorm, 0.70f) * 0.70f, 0.0f, 1.0f));
+    connect(m_bluezManager, &BluezBluetoothManager::pairingFinished, this,
+        [this](const QString &mac, bool success, const QString &errorMsg) {
+            Q_UNUSED(errorMsg);
+            m_isPairingPromptActive = false;
+            m_isPairingAuthWaiting = false;
+            m_isConnectingDevice = false;
+            emit pairingPromptChanged();
+            emit pairingAuthWaitingChanged();
+            emit connectingDeviceChanged();
+            if (success) {
+                qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if (m_lastPairedSuccessMac.compare(mac, Qt::CaseInsensitive) == 0 && (now - m_lastPairedSuccessTime) < 4000) {
+                    qDebug() << "[Apex IVI] Suppressing duplicate pairingFinished for:" << mac;
+                    return;
+                }
+                m_lastPairedSuccessMac = mac;
+                m_lastPairedSuccessTime = now;
 
-    connect(m_player, &QMediaPlayer::playbackStateChanged, this, [this](QMediaPlayer::PlaybackState state) {
-        bool playing = (state == QMediaPlayer::PlayingState);
+                qDebug() << "[Apex IVI] Pairing succeeded for:" << mac;
+                refreshBluetoothDevices();
+                QString devName = m_incomingPairingDeviceName;
+                for (const auto &d : m_bluetoothDeviceList) {
+                    if (d.toMap()["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+                        devName = d.toMap()["name"].toString();
+                        break;
+                    }
+                }
+                emit devicePairedSuccessfully(mac, devName);
+            } else {
+                qDebug() << "[Apex IVI] Pairing failed for:" << mac << "Error:" << errorMsg;
+            }
+        });
+
+    connect(m_bluezManager, &BluezBluetoothManager::pairedDevicesChanged, this, &SystemController::refreshBluetoothDevices);
+
+    // Initialize PBAP Phonebook and Call History sync manager
+    m_pbapManager = new PbapSyncManager(this);
+    connect(m_pbapManager, &PbapSyncManager::syncStarted, this, [this]() {
+        m_isSyncingContacts = true;
+        emit isSyncingContactsChanged();
+    });
+    connect(m_pbapManager, &PbapSyncManager::contactsUpdated, this, [this](const QVariantList &contacts) {
+        if (!contacts.isEmpty()) {
+            m_contactsList = contacts;
+            m_contactsCount = contacts.size();
+            emit contactsListChanged();
+            emit contactsCountChanged();
+            qDebug() << "[Apex IVI] Live updated contacts list from phone. Count:" << m_contactsCount;
+        }
+    });
+    connect(m_pbapManager, &PbapSyncManager::callHistoryUpdated, this, [this](const QVariantList &calls) {
+        if (!calls.isEmpty()) {
+            // Keep recent locally observed calls until the phone publishes the
+            // matching PBAP record. This prevents a sync started before a missed
+            // call ended from erasing that call from Recents.
+            QVariantList merged = calls;
+            QVariantList stillPending;
+            auto normalizedNumber = [](const QString &value) {
+                QString result;
+                for (const QChar &ch : value) if (ch.isDigit()) result.append(ch);
+                return result;
+            };
+            for (const QVariant &pendingValue : m_localCallHistoryPending) {
+                const QVariantMap pending = pendingValue.toMap();
+                const QString pendingNumber = normalizedNumber(pending.value("number").toString());
+                const qint64 pendingStamp = pending.value("timestamp").toLongLong();
+                bool foundOnPhone = false;
+                for (const QVariant &remoteValue : calls) {
+                    const QVariantMap remote = remoteValue.toMap();
+                    if (normalizedNumber(remote.value("number").toString()) != pendingNumber) continue;
+                    qint64 remoteStamp = remote.value("timestamp").toLongLong();
+                    if (remoteStamp > 0 && remoteStamp < 100000000000LL) remoteStamp *= 1000;
+                    if ((remoteStamp > 0 && qAbs(remoteStamp - pendingStamp) <= 180000)
+                        || remote.value("date").toString() == pending.value("date").toString()) {
+                        foundOnPhone = true;
+                        break;
+                    }
+                }
+                if (!foundOnPhone) {
+                    merged.prepend(pendingValue);
+                    stillPending.append(pendingValue);
+                }
+            }
+            m_localCallHistoryPending = stillPending;
+            if (merged.size() > 25) merged = merged.mid(0, 25);
+            m_callHistory = merged;
+            m_callHistoryCount = m_callHistory.size();
+            emit callHistoryChanged();
+            emit callHistoryCountChanged();
+            qDebug() << "[Apex IVI] Live updated call history from phone. Count:" << m_callHistoryCount;
+        }
+    });
+    connect(m_pbapManager, &PbapSyncManager::syncFinished, this, [this](bool success, const QString &msg) {
+        m_isSyncingContacts = false;
+        emit isSyncingContactsChanged();
+        qDebug() << "[Apex IVI] PBAP sync cycle complete. Success:" << success << msg;
+    });
+
+    connect(m_bluezManager, &BluezBluetoothManager::deviceConnected, this,
+        [this](const QString &mac) {
+            qDebug() << "[Apex IVI] Bluetooth device connected via D-Bus:" << mac;
+            refreshBluetoothDevices();
+            // Disable SNIFF and power save on the Bluetooth link to eliminate packet delays and audio stutter.
+            QProcess::startDetached("hciconfig", QStringList() << "hci0" << "lp" << "NONE");
+            QProcess::startDetached("hcitool", QStringList() << "lp" << mac << "NONE");
+            QProcess::startDetached("iw", QStringList() << "wlan0" << "set" << "power_save" << "off");
+            QTimer::singleShot(1000, this, [this]() {
+                updatePrimaryPhoneTelemetry();
+            });
+            // Kick an initial media poll 1.5s after connect so track info is
+            // populated the moment the user opens the Bluetooth Audio screen.
+            QTimer::singleShot(1500, this, &SystemController::pollBluetoothMediaPlayer);
+        });
+
+    connect(m_bluezManager, &BluezBluetoothManager::deviceDisconnected, this,
+        [this](const QString &mac) {
+            qDebug() << "[Apex IVI] Bluetooth device disconnected via D-Bus:" << mac;
+            if (m_bluetoothCallActive) {
+                // A phone-side hang-up can tear down the HFP/device link.  End
+                // the IVI call UI immediately rather than leaving a frozen
+                // call timer/modal on screen.
+                finalizeTrackedCallHistory();
+                m_bluetoothCallActive = false;
+                m_bluetoothCallStatus = "ended";
+                m_dialStartedTimestamp = 0;
+                m_noCallCount = 0;
+                emit bluetoothCallActiveChanged();
+                emit bluetoothCallStatusChanged();
+                emit remoteCallEnded();
+                releaseCallAudioFocus();
+                scheduleCallHistoryRefresh();
+            }
+            QString devName = "Mobile Device";
+            for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+                auto d = m_bluetoothDeviceList[i].toMap();
+                if (d["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+                    devName = d["name"].toString();
+                    d["connected"] = false;
+                    d["handsFree"] = false;
+                    d["audio"] = false;
+                    m_bluetoothDeviceList[i] = d;
+                    break;
+                }
+            }
+            emit deviceDisconnected(mac, devName);
+            m_cachedPlayerPath.clear();
+            refreshBluetoothDevices();
+            updatePrimaryPhoneTelemetry(false);
+        });
+
+    connect(m_bluezManager, &BluezBluetoothManager::batteryLevelChanged, this,
+        [this](const QString &mac, int percentage) {
+            // Update cached battery in device list
+            for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+                auto map = m_bluetoothDeviceList[i].toMap();
+                if (map["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+                    map["battery"] = percentage;
+                    m_bluetoothDeviceList[i] = map;
+                    break;
+                }
+            }
+
+            // Only update the main IVI battery meter if mac is the strictly connected Priority #1 phone!
+            QString primaryMac = primaryConnectedPhoneMac();
+            if (!primaryMac.isEmpty() && primaryMac.compare(mac, Qt::CaseInsensitive) == 0) {
+                qDebug() << "[Apex IVI] Live battery update from Priority #1 phone" << mac << ":" << percentage << "%";
+                setPhoneBatteryLevel(percentage);
+            } else {
+                qDebug() << "[Apex IVI] Secondary phone battery cached" << mac << ":" << percentage << "% (Primary is" << primaryMac << ")";
+            }
+        });
+
+    // Refresh Bluetooth devices and phonebook data (from native BlueZ ground truth)
+    refreshBluetoothDevices();
+    refreshPhonebookData();
+
+    QTimer::singleShot(2500, this, [this]() {
+        updatePrimaryPhoneTelemetry(false);
+    });
+
+    // 10-second periodic monitor timer for Bluetooth device connection/state changes
+    m_btMonitorTimer = new QTimer(this);
+    m_btMonitorTimer->setInterval(10000);
+    connect(m_btMonitorTimer, &QTimer::timeout, this, &SystemController::refreshBluetoothDevices);
+    m_btMonitorTimer->start();
+
+    // Status now uses the persistent local HFP daemon, so it can safely poll
+    // call state without reopening RFCOMM or disrupting phone audio.
+    m_callMonitorTimer = new QTimer(this);
+    m_callMonitorTimer->setInterval(2000);
+    connect(m_callMonitorTimer, &QTimer::timeout, this, &SystemController::pollBluetoothCallState);
+    m_callMonitorTimer->start();
+
+    // PBAP servers on phones typically allow only one active session and may
+    // reject rapid reconnects.  A 30-second full phonebook pull caused the IVI
+    // to repeatedly race the previous sync; use a conservative background
+    // refresh while keeping the manual Sync action immediate.
+    m_callHistoryAutoRefreshTimer = new QTimer(this);
+    m_callHistoryAutoRefreshTimer->setInterval(5 * 60 * 1000);
+    connect(m_callHistoryAutoRefreshTimer, &QTimer::timeout, this, &SystemController::syncRecentCallHistory);
+    m_callHistoryAutoRefreshTimer->start();
+
+    connect(m_bluezManager, &BluezBluetoothManager::deviceRemoved, this,
+        [this](const QString &mac) {
+            qDebug() << "[Apex IVI] Device removed from BlueZ/phone:" << mac;
+            for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+                if (m_bluetoothDeviceList[i].toMap()["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+                    m_bluetoothDeviceList.removeAt(i);
+                    break;
+                }
+            }
+            saveBluetoothDeviceList();
+            emit bluetoothDeviceListChanged();
+            refreshBluetoothDevices();
+        });
+
+    connect(m_bluezManager, &BluezBluetoothManager::discoveredDevicesChanged, this, &SystemController::discoveredDeviceListChanged);
+    connect(m_bluezManager, &BluezBluetoothManager::discoveryStateChanged, this, &SystemController::discoveryStateChanged);
+
+    // Start Dedicated Worker Thread for Live Radio Streaming to guarantee 60 FPS GUI
+    m_radioThread = new QThread(this);
+    m_radioWorker = new RadioStreamWorker(); // No parent so it can be moved to thread
+    m_radioWorker->moveToThread(m_radioThread);
+
+    connect(m_radioThread, &QThread::started, m_radioWorker, &RadioStreamWorker::init);
+    connect(m_radioThread, &QThread::finished, m_radioWorker, &QObject::deleteLater);
+
+    connect(m_radioWorker, &RadioStreamWorker::playbackStateChanged, this, [this](bool playing) {
         if (m_radioPlaying != playing) {
             m_radioPlaying = playing;
             emit radioStateChanged();
         }
     });
 
-    connect(m_player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
-        m_radioLoading = (status == QMediaPlayer::LoadingMedia || status == QMediaPlayer::BufferingMedia);
-        emit radioLoadingChanged();
+    connect(m_radioWorker, &RadioStreamWorker::mediaStatusChanged, this, [this](bool loading) {
+        if (m_radioLoading != loading) {
+            m_radioLoading = loading;
+            emit radioLoadingChanged();
+        }
     });
 
-    // Debounce timer for zero-lag channel switching and dial scrubbing
+    m_radioThread->start();
+
+    // Initial volume matching default level 29 out of 45 with perceptual curve
+    float initialNorm = 29.0f / 45.0f;
+    float initialGain = std::clamp(initialNorm * 0.30f + std::pow(initialNorm, 0.70f) * 0.70f, 0.0f, 1.0f);
+    QMetaObject::invokeMethod(m_radioWorker, "setVolume", Qt::QueuedConnection, Q_ARG(float, initialGain));
+
     m_radioTuneTimer = new QTimer(this);
     m_radioTuneTimer->setSingleShot(true);
-    m_radioTuneTimer->setInterval(120);
+    m_radioTuneTimer->setInterval(350);
     connect(m_radioTuneTimer, &QTimer::timeout, this, &SystemController::startRadioStream);
+
+    // Bluetooth Media Progress & Polling Timers
+    if (QFile::exists("/tmp/apex_bt_album_art.jpg")) {
+        m_bluetoothAlbumArtUrl = "file:///tmp/apex_bt_album_art.jpg";
+    }
+
+    m_bluetoothMediaProgressTimer = new QTimer(this);
+    m_bluetoothMediaProgressTimer->setInterval(1000);
+    connect(m_bluetoothMediaProgressTimer, &QTimer::timeout, this, [this]() {
+        if (m_bluetoothPlaybackStatus == "playing") {
+            m_bluetoothTrackPositionMs += 1000;
+            if (m_bluetoothTrackDurationMs > 0 && m_bluetoothTrackPositionMs >= m_bluetoothTrackDurationMs) {
+                if (m_bluetoothRepeatMode == "singletrack") {
+                    m_bluetoothTrackPositionMs = 0;
+                } else if (m_bluetoothRepeatMode == "alltracks") {
+                    bluetoothMediaNext();
+                } else {
+                    m_bluetoothPlaybackStatus = "paused";
+                    emit bluetoothPlaybackStatusChanged();
+                }
+            }
+            emit bluetoothTrackPositionChanged();
+        }
+    });
+    m_bluetoothMediaProgressTimer->start();
+
+    // Poll BlueZ MediaPlayer1 every 2 seconds using async D-Bus (no subprocess, no event-loop stalls).
+    // 2s is enough to catch track changes while not hammering the BT link.
+    m_bluetoothMediaMonitorTimer = new QTimer(this);
+    m_bluetoothMediaMonitorTimer->setInterval(2000);
+    connect(m_bluetoothMediaMonitorTimer, &QTimer::timeout, this, &SystemController::pollBluetoothMediaPlayer);
+    m_bluetoothMediaMonitorTimer->start();
 
     // Populate Real Authentic Indian FM & AM Radio Stations (High-Speed Direct MP3 Streams)
     QVariantMap s1;
@@ -283,6 +666,31 @@ SystemController::SystemController(QObject *parent)
     m_isStationFavorited = true;
     m_selectedMediaSource = "none";
 
+    // Initialize Radio Server Network Engine & Cached Stations
+    m_networkManager = new QNetworkAccessManager(this);
+
+    // Check if custom server URL is configured in /etc/apex-ivi/radio_server.conf
+    QFile serverConfigFile("/etc/apex-ivi/radio_server.conf");
+    if (serverConfigFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString line = QString::fromUtf8(serverConfigFile.readLine()).trimmed();
+        if (!line.isEmpty()) {
+            m_radioServerUrl = line;
+        }
+        serverConfigFile.close();
+    }
+
+    // Load cached stations if available
+    loadCachedRadioStations();
+
+    // Trigger initial fetch from radio server
+    fetchRadioStations();
+
+    // Periodically poll radio server (every 30 seconds) to update live stations and RDS song metadata
+    m_radioServerPollTimer = new QTimer(this);
+    m_radioServerPollTimer->setInterval(30000);
+    connect(m_radioServerPollTimer, &QTimer::timeout, this, &SystemController::fetchRadioStations);
+    m_radioServerPollTimer->start();
+
     // Initialize Voice Memo
     m_voiceRecordLevel = 3;
     m_nativeRecorder = new NativeAudioRecorder(this);
@@ -325,6 +733,21 @@ SystemController::SystemController(QObject *parent)
             idx++;
         }
         m_nextMemoNumber = idx;
+    }
+}
+
+SystemController::~SystemController()
+{
+    if (m_radioThread) {
+        if (m_radioWorker) {
+            QMetaObject::invokeMethod(m_radioWorker, "cleanup", Qt::BlockingQueuedConnection);
+        }
+        m_radioThread->quit();
+        m_radioThread->wait(1000);
+    }
+    if (m_btAgentProc) {
+        m_btAgentProc->terminate();
+        m_btAgentProc->waitForFinished(500);
     }
 }
 
@@ -391,6 +814,15 @@ void SystemController::setCurrentScreen(const QString &screen)
         if (m_currentScreen != "loading") {
             reportActivity();
         }
+        if (m_currentScreen != "bluetooth_connections") {
+            setBluetoothDiscoverable(false);
+        }
+        if (m_currentScreen == "bluetooth_audio") {
+            if (m_bluetoothAutoPlayInhibited) {
+                qDebug() << "[Apex IVI] User opened bluetooth_audio screen -> lifting boot auto-play inhibition";
+                m_bluetoothAutoPlayInhibited = false;
+            }
+        }
     }
 }
 
@@ -421,7 +853,7 @@ void SystemController::setRadioBand(const QString &band)
         m_radioBand = band;
         emit radioBandChanged();
         for (int i = 0; i < m_stationList.size(); ++i) {
-            if (m_stationList[i].toMap()["band"].toString() == m_radioBand) {
+            if (m_stationList[i].toMap()["band"].toString().compare(m_radioBand, Qt::CaseInsensitive) == 0) {
                 selectStation(i);
                 break;
             }
@@ -440,19 +872,29 @@ void SystemController::toggleRadioBand()
 
 void SystemController::startRadioStream()
 {
+    // HIGHEST PRIORITY 1: Phone call blocks all media
+    if (m_callAudioFocusActive || m_bluetoothCallActive) {
+        qWarning() << "[Apex IVI Audio Priority] Cannot start radio: Active phone call in progress!";
+        return;
+    }
+
     if (m_stationList.isEmpty() || m_currentStationIndex < 0 || m_currentStationIndex >= m_stationList.size()) return;
     QVariantMap cur = m_stationList[m_currentStationIndex].toMap();
     QString urlStr = cur["streamUrl"].toString();
 
-    if (!urlStr.isEmpty() && m_player) {
+    if (!urlStr.isEmpty() && m_radioWorker) {
+        // PRIORITY RULE: Exclusive media playback - pause Bluetooth music
+        qDebug() << "[Apex IVI Audio Priority] Starting FM/AM Radio -> Ensuring Bluetooth Music is paused";
+        bluetoothMediaPause();
+        m_selectedMediaSource = m_radioBand.toLower();
+        emit selectedMediaSourceChanged();
+
         m_radioLoading = true;
         emit radioLoadingChanged();
-        m_player->stop();
-        m_player->setSource(QUrl(urlStr));
-        m_player->play();
         m_radioPlaying = true;
         emit radioStateChanged();
-        qDebug() << "[Apex IVI Radio] Streaming live station:" << m_radioStation << m_currentStationName << "URL:" << urlStr;
+        QMetaObject::invokeMethod(m_radioWorker, "playStream", Qt::QueuedConnection, Q_ARG(QString, urlStr));
+        qDebug() << "[Apex IVI Radio] Sent async stream request to worker thread:" << m_radioStation << m_currentStationName << "URL:" << urlStr;
     }
 }
 
@@ -464,8 +906,8 @@ void SystemController::playCurrentStation()
 
 void SystemController::pauseRadio()
 {
-    if (m_player) {
-        m_player->pause();
+    if (m_radioWorker) {
+        QMetaObject::invokeMethod(m_radioWorker, "pause", Qt::QueuedConnection);
     }
     m_radioPlaying = false;
     emit radioStateChanged();
@@ -473,8 +915,8 @@ void SystemController::pauseRadio()
 
 void SystemController::stopRadio()
 {
-    if (m_player) {
-        m_player->stop();
+    if (m_radioWorker) {
+        QMetaObject::invokeMethod(m_radioWorker, "stop", Qt::QueuedConnection);
     }
     m_radioPlaying = false;
     emit radioStateChanged();
@@ -483,8 +925,8 @@ void SystemController::stopRadio()
 
 void SystemController::turnOffMedia()
 {
-    if (m_player) {
-        m_player->stop();
+    if (m_radioWorker) {
+        QMetaObject::invokeMethod(m_radioWorker, "stop", Qt::QueuedConnection);
     }
     m_radioPlaying = false;
     m_selectedMediaSource = "none";
@@ -498,17 +940,19 @@ void SystemController::toggleRadio()
     if (m_radioPlaying) {
         pauseRadio();
     } else {
-        if (!m_player || m_player->source().isEmpty() || m_selectedMediaSource == "none") {
-            playCurrentStation();
-        } else {
-            m_player->play();
+        if (m_callAudioFocusActive || m_bluetoothCallActive) {
+            qWarning() << "[Apex IVI Audio Priority] Cannot toggle radio on: Active phone call in progress!";
+            return;
         }
-        m_radioPlaying = true;
+        if (m_bluetoothPlaybackStatus == "playing") {
+            qDebug() << "[Apex IVI Audio Priority] Resuming FM/AM Radio -> Pausing Bluetooth Music";
+            bluetoothMediaPause();
+        }
         if (m_selectedMediaSource == "none" || m_selectedMediaSource.isEmpty()) {
             m_selectedMediaSource = m_radioBand.toLower();
             emit selectedMediaSourceChanged();
         }
-        emit radioStateChanged();
+        startRadioStream();
     }
 }
 
@@ -523,13 +967,18 @@ void SystemController::selectStation(int index)
         m_currentStationName = cur["name"].toString();
         m_currentRdsInfo = cur["rdsInfo"].toString();
         m_isStationFavorited = cur["isFavorite"].toBool();
-        m_radioBand = cur["band"].toString();
+        QString newBand = cur["band"].toString();
 
         emit radioStationChanged();
         emit currentStationNameChanged();
         emit currentRdsInfoChanged();
         emit isStationFavoritedChanged();
-        emit radioBandChanged();
+        cycleRandomScenicBackground();
+
+        if (m_radioBand != newBand) {
+            m_radioBand = newBand;
+            emit radioBandChanged();
+        }
 
         if (m_selectedMediaSource != m_radioBand.toLower()) {
             m_selectedMediaSource = m_radioBand.toLower();
@@ -540,10 +989,11 @@ void SystemController::selectStation(int index)
         emit radioLoadingChanged();
 
         if (m_radioTuneTimer) {
-            m_radioTuneTimer->start(120);
+            m_radioTuneTimer->start(350);
         }
     }
 }
+
 
 void SystemController::tuneFrequency(double delta)
 {
@@ -691,26 +1141,201 @@ void SystemController::removeFavoriteByFrequency(const QString &freq)
     }
 }
 
+void SystemController::setRadioServerUrl(const QString &url)
+{
+    if (m_radioServerUrl != url) {
+        m_radioServerUrl = url;
+        emit radioServerUrlChanged();
+        fetchRadioStations();
+    }
+}
+
+void SystemController::fetchRadioStations()
+{
+    if (!m_networkManager || m_radioServerUrl.isEmpty()) return;
+    QUrl url(m_radioServerUrl);
+    if (!url.isValid()) return;
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+
+    QNetworkReply *reply = m_networkManager->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+        if (reply->error() == QNetworkReply::NoError) {
+            QByteArray data = reply->readAll();
+            parseRadioStationsJson(data);
+            saveCachedRadioStations(data);
+            if (!m_radioServerOnline) {
+                m_radioServerOnline = true;
+                emit radioServerOnlineChanged();
+            }
+            qDebug() << "[RadioServer] Successfully updated radio stations from server:" << m_radioServerUrl;
+        } else {
+            if (m_radioServerOnline) {
+                m_radioServerOnline = false;
+                emit radioServerOnlineChanged();
+            }
+            qDebug() << "[RadioServer] Radio server fetch:" << reply->errorString() << "- Using cached stations.";
+        }
+    });
+}
+
+void SystemController::parseRadioStationsJson(const QByteArray &jsonData)
+{
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(jsonData, &err);
+    if (err.error != QJsonParseError::NoError) {
+        qWarning() << "[RadioServer] JSON parse error:" << err.errorString();
+        return;
+    }
+
+    QJsonArray arr;
+    if (doc.isArray()) {
+        arr = doc.array();
+    } else if (doc.isObject()) {
+        QJsonObject obj = doc.object();
+        if (obj.contains("stations") && obj["stations"].isArray()) {
+            arr = obj["stations"].toArray();
+        } else if (obj.contains("radio") && obj["radio"].isArray()) {
+            arr = obj["radio"].toArray();
+        }
+    }
+
+    if (arr.isEmpty()) return;
+
+    // Preserve user favorite selections
+    QMap<QString, bool> favMap;
+    for (const QVariant &st : m_stationList) {
+        QVariantMap m = st.toMap();
+        favMap[m["frequency"].toString()] = m["isFavorite"].toBool();
+    }
+
+    QVariantList newList;
+    for (const QJsonValue &val : arr) {
+        if (!val.isObject()) continue;
+        QJsonObject o = val.toObject();
+        QVariantMap station;
+        QString freq = o.value("frequency").toString();
+        if (freq.isEmpty() && o.contains("freq")) freq = o.value("freq").toString();
+        if (freq.isEmpty()) continue;
+
+        station["frequency"] = freq;
+        station["name"] = o.value("name").toString();
+        station["band"] = o.value("band").toString("FM").toUpper();
+
+        QString rds = o.value("rdsInfo").toString();
+        if (rds.isEmpty()) rds = o.value("rds").toString();
+        station["rdsInfo"] = rds;
+
+        QString url = o.value("streamUrl").toString();
+        if (url.isEmpty()) url = o.value("url").toString();
+        station["streamUrl"] = url;
+
+        if (favMap.contains(freq)) {
+            station["isFavorite"] = favMap[freq];
+        } else {
+            station["isFavorite"] = o.value("isFavorite").toBool(false);
+        }
+        newList.append(station);
+    }
+
+    if (!newList.isEmpty()) {
+        m_stationList = newList;
+        emit stationListChanged();
+
+        // Sync currently tuned station details if present in the updated list
+        for (int i = 0; i < m_stationList.size(); ++i) {
+            QVariantMap s = m_stationList[i].toMap();
+            if (s["frequency"].toString() == m_radioStation) {
+                m_currentStationIndex = i;
+                QString newName = s["name"].toString();
+                QString newRds = s["rdsInfo"].toString();
+                if (m_currentStationName != newName) {
+                    m_currentStationName = newName;
+                    emit currentStationNameChanged();
+                }
+                if (m_currentRdsInfo != newRds) {
+                    m_currentRdsInfo = newRds;
+                    emit currentRdsInfoChanged();
+                }
+                bool newFav = s["isFavorite"].toBool();
+                if (m_isStationFavorited != newFav) {
+                    m_isStationFavorited = newFav;
+                    emit isStationFavoritedChanged();
+                }
+                break;
+            }
+        }
+    }
+}
+
+void SystemController::loadCachedRadioStations()
+{
+    QString cachePath = "/etc/apex-ivi/radio_stations.json";
+    if (!QFile::exists(cachePath)) {
+        cachePath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/radio_stations.json";
+    }
+    if (QFile::exists(cachePath)) {
+        QFile f(cachePath);
+        if (f.open(QIODevice::ReadOnly)) {
+            parseRadioStationsJson(f.readAll());
+            f.close();
+            qDebug() << "[RadioServer] Loaded cached radio stations from" << cachePath;
+        }
+    }
+}
+
+void SystemController::saveCachedRadioStations(const QByteArray &jsonData)
+{
+    QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dirPath);
+    QFile f(dirPath + "/radio_stations.json");
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write(jsonData);
+        f.close();
+    }
+}
+
 void SystemController::selectMediaSource(const QString &source)
 {
     qDebug() << "[Apex IVI Media] Selected media source:" << source;
     setSelectedMediaSource(source);
     if (source == "fm") {
-        setRadioBand("FM");
-        playCurrentStation();
+        qDebug() << "[Apex IVI Audio Priority] FM selected -> Ensuring Bluetooth Music is paused";
+        bluetoothMediaPause();
+        if (m_radioBand != "FM") {
+            setRadioBand("FM");
+        } else {
+            playCurrentStation();
+        }
         navigateTo("radio");
     } else if (source == "am") {
-        setRadioBand("AM");
-        playCurrentStation();
+        qDebug() << "[Apex IVI Audio Priority] AM selected -> Ensuring Bluetooth Music is paused";
+        bluetoothMediaPause();
+        if (m_radioBand != "AM") {
+            setRadioBand("AM");
+        } else {
+            playCurrentStation();
+        }
         navigateTo("radio");
     } else if (source == "bluetooth") {
+        // HIGHEST MEDIA PRIORITY: Turn off radio immediately
+        if (m_radioPlaying) {
+            qDebug() << "[Apex IVI Audio Priority] Bluetooth selected -> Turning off FM/AM Radio";
+            stopRadio();
+        }
         if (m_bluetoothConnected) {
             qDebug() << "[Apex IVI Media] Bluetooth Audio active";
-            navigateTo("home");
+            bluetoothMediaPlay();
+            navigateTo("bluetooth_audio");
         } else {
             navigateTo("bluetooth_connections");
         }
     } else if (source == "usb") {
+        stopRadio();
+        bluetoothMediaPause();
         qDebug() << "[Apex IVI Media] USB Music active";
         navigateTo("home");
     }
@@ -752,17 +1377,38 @@ void SystemController::addDevice(const QString &name, bool handsFree, bool audio
         }
     }
 
-    QVariantMap newDev;
-    newDev["name"] = name;
-    newDev["handsFree"] = handsFree;
-    newDev["audio"] = audio;
-    newDev["connected"] = (handsFree || audio);
-    m_bluetoothDeviceList.append(newDev);
-    m_activeDeviceIndex = m_bluetoothDeviceList.size() - 1;
+    QString mac = getMacForDeviceName(name);
+
+    // If device with this MAC already exists, update it rather than duplicating
+    bool existing = false;
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        QVariantMap dev = m_bluetoothDeviceList[i].toMap();
+        if (!mac.isEmpty() && dev["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+            dev["handsFree"] = handsFree;
+            dev["audio"] = audio;
+            dev["connected"] = (handsFree || audio);
+            m_bluetoothDeviceList[i] = dev;
+            existing = true;
+            m_activeDeviceIndex = i;
+            break;
+        }
+    }
+
+    if (!existing) {
+        QVariantMap newDev;
+        newDev["name"] = name;
+        newDev["mac"] = mac;
+        newDev["handsFree"] = handsFree;
+        newDev["audio"] = audio;
+        newDev["connected"] = (handsFree || audio);
+        m_bluetoothDeviceList.append(newDev);
+        m_activeDeviceIndex = m_bluetoothDeviceList.size() - 1;
+    }
+
     setBluetoothConnected(true);
     saveBluetoothDeviceList();
     emit bluetoothDeviceListChanged();
-    qDebug() << "[Apex IVI] Added new device:" << name << "- HF:" << handsFree << "Audio:" << audio;
+    qDebug() << "[Apex IVI] Added/updated device:" << name << "MAC:" << mac << "- HF:" << handsFree << "Audio:" << audio;
 }
 
 void SystemController::deactivateHandsFree(int index)
@@ -789,14 +1435,18 @@ void SystemController::deactivateHandsFree(int index)
 void SystemController::setDevicePreferences(int index, bool handsFree, bool audio)
 {
     if (index >= 0 && index < m_bluetoothDeviceList.size()) {
-        if (handsFree) {
+        // If handsFree or audio is requested, enforce single active device by disabling on other devices
+        if (handsFree || audio) {
             for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
                 if (i != index) {
                     QVariantMap d = m_bluetoothDeviceList[i].toMap();
-                    if (d["handsFree"].toBool()) {
-                        d["handsFree"] = false;
-                        d["connected"] = d["audio"].toBool();
-                        m_bluetoothDeviceList[i] = d;
+                    QString otherMac = d["mac"].toString().trimmed().toUpper();
+                    if (handsFree) d["handsFree"] = false;
+                    if (audio) d["audio"] = false;
+                    d["connected"] = (d["handsFree"].toBool() || d["audio"].toBool());
+                    m_bluetoothDeviceList[i] = d;
+                    if (!d["connected"].toBool() && m_bluezManager && !otherMac.isEmpty()) {
+                        m_bluezManager->disconnectDevice(otherMac);
                     }
                 }
             }
@@ -807,6 +1457,26 @@ void SystemController::setDevicePreferences(int index, bool handsFree, bool audi
         dev["connected"] = (handsFree || audio);
         m_bluetoothDeviceList[index] = dev;
         m_activeDeviceIndex = index;
+
+        // Apply preferences to BlueZ D-Bus backend
+        QString mac = dev["mac"].toString().trimmed().toUpper();
+        if (m_bluezManager && !mac.isEmpty()) {
+            if (handsFree || audio) {
+                bool alreadyConnected = false;
+                for (const auto &pdev : m_bluezManager->pairedDevices()) {
+                    if (pdev.toMap()["mac"].toString().compare(mac, Qt::CaseInsensitive) == 0) {
+                        alreadyConnected = pdev.toMap()["connected"].toBool();
+                        break;
+                    }
+                }
+                if (!alreadyConnected) {
+                    m_bluezManager->connectDevice(mac);
+                }
+            } else {
+                m_bluezManager->disconnectDevice(mac);
+            }
+        }
+
         bool anyConnected = false;
         for (const auto &d : m_bluetoothDeviceList) {
             if (d.toMap()["connected"].toBool()) {
@@ -815,9 +1485,69 @@ void SystemController::setDevicePreferences(int index, bool handsFree, bool audi
             }
         }
         setBluetoothConnected(anyConnected);
+        bool expectedPhoneConnected = anyConnected && handsFree;
+        if (m_phoneConnected != expectedPhoneConnected) {
+            m_phoneConnected = expectedPhoneConnected;
+            emit phoneConnectionChanged();
+        }
         saveBluetoothDeviceList();
         emit bluetoothDeviceListChanged();
         qDebug() << "[Apex IVI] Updated device preferences:" << dev["name"].toString() << "- HF:" << handsFree << "Audio:" << audio;
+
+        if (handsFree || audio) {
+            updatePrimaryPhoneTelemetry(true);
+        }
+    }
+}
+
+void SystemController::setDevicePreferencesForMac(const QString &mac, bool handsFree, bool audio)
+{
+    QString upperMac = mac.trimmed().toUpper();
+    if (upperMac.isEmpty()) return;
+
+    qDebug() << "[Apex IVI] setDevicePreferencesForMac:" << upperMac << "HF:" << handsFree << "Audio:" << audio;
+
+    if (m_bluezManager && m_bluezManager->isInputDevice(upperMac)) {
+        qDebug() << "[Apex IVI] Peripheral device detected (mouse/keyboard), ignoring in phone connections list:" << upperMac;
+        return;
+    }
+
+    // Refresh from BlueZ so newly paired device exists
+    refreshBluetoothDevices();
+
+    int foundIdx = -1;
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        if (m_bluetoothDeviceList[i].toMap()["mac"].toString().compare(upperMac, Qt::CaseInsensitive) == 0) {
+            foundIdx = i;
+            break;
+        }
+    }
+
+    if (foundIdx != -1) {
+        if (foundIdx != 0) {
+            m_bluetoothDeviceList.move(foundIdx, 0);
+        }
+        setDevicePreferences(0, handsFree, audio);
+    } else {
+        QString name = m_incomingPairingDeviceName.isEmpty() ? "Bluetooth Device" : m_incomingPairingDeviceName;
+        if (m_bluezManager) {
+            for (const auto &p : m_bluezManager->pairedDevices()) {
+                if (p.toMap()["mac"].toString().compare(upperMac, Qt::CaseInsensitive) == 0) {
+                    name = p.toMap()["name"].toString();
+                    break;
+                }
+            }
+        }
+
+        QVariantMap newDev;
+        newDev["name"] = name;
+        newDev["mac"] = upperMac;
+        newDev["handsFree"] = handsFree;
+        newDev["audio"] = audio;
+        newDev["connected"] = (handsFree || audio);
+        m_bluetoothDeviceList.prepend(newDev);
+
+        setDevicePreferences(0, handsFree, audio);
     }
 }
 
@@ -839,21 +1569,59 @@ void SystemController::toggleDeviceAudio(int index)
     }
 }
 
+QString SystemController::getMacForDeviceName(const QString &name)
+{
+    QString searchName = name.trimmed();
+    if (searchName.isEmpty()) return QString();
+    if (m_bluezManager) {
+        for (const auto &devVar : m_bluezManager->pairedDevices()) {
+            QVariantMap map = devVar.toMap();
+            if (map["name"].toString().compare(searchName, Qt::CaseInsensitive) == 0) {
+                return map["mac"].toString();
+            }
+        }
+        for (const auto &devVar : m_bluezManager->discoveredDevices()) {
+            QVariantMap map = devVar.toMap();
+            if (map["name"].toString().compare(searchName, Qt::CaseInsensitive) == 0) {
+                return map["mac"].toString();
+            }
+        }
+    }
+    return QString();
+}
+
 void SystemController::connectDevice(int index)
 {
     if (index >= 0 && index < m_bluetoothDeviceList.size()) {
+        QVariantMap dev = m_bluetoothDeviceList[index].toMap();
+        QString mac = dev["mac"].toString().trimmed().toUpper();
+        m_connectingDeviceName = dev["name"].toString();
+        m_connectingDeviceMac = mac;
+        m_isConnectingDevice = true;
+        emit connectingDeviceChanged();
+        emit deviceConnecting(m_connectingDeviceName, mac);
+
+        if (m_bluezManager && !mac.isEmpty()) {
+            qDebug() << "[Apex IVI] Connecting Bluetooth device via D-Bus:" << dev["name"].toString() << mac;
+            m_bluezManager->connectDevice(mac);
+        }
         setDevicePreferences(index, true, true);
     }
 }
 
-void SystemController::removeDevice(int index)
+void SystemController::disconnectDevice(int index)
 {
     if (index >= 0 && index < m_bluetoothDeviceList.size()) {
-        QString removedName = m_bluetoothDeviceList[index].toMap()["name"].toString();
-        m_bluetoothDeviceList.removeAt(index);
-        if (m_activeDeviceIndex >= m_bluetoothDeviceList.size()) {
-            m_activeDeviceIndex = m_bluetoothDeviceList.size() - 1;
+        QVariantMap dev = m_bluetoothDeviceList[index].toMap();
+        QString mac = dev["mac"].toString().trimmed().toUpper();
+        if (m_bluezManager && !mac.isEmpty()) {
+            qDebug() << "[Apex IVI] Disconnecting Bluetooth device via D-Bus:" << dev["name"].toString() << mac;
+            m_bluezManager->disconnectDevice(mac);
         }
+        dev["connected"] = false;
+        dev["handsFree"] = false;
+        dev["audio"] = false;
+        m_bluetoothDeviceList[index] = dev;
         bool anyConnected = false;
         for (const auto &d : m_bluetoothDeviceList) {
             if (d.toMap()["connected"].toBool()) {
@@ -864,7 +1632,100 @@ void SystemController::removeDevice(int index)
         setBluetoothConnected(anyConnected);
         saveBluetoothDeviceList();
         emit bluetoothDeviceListChanged();
-        qDebug() << "[Apex IVI] Removed Bluetooth device:" << removedName;
+        emit deviceDisconnected(mac, dev["name"].toString());
+        qDebug() << "[Apex IVI] Disconnected Bluetooth device at index" << index << ":" << dev["name"].toString();
+    }
+}
+
+void SystemController::removeDevice(int index)
+{
+    if (index >= 0 && index < m_bluetoothDeviceList.size()) {
+        deleteMultipleBluetoothDevices(QVariantList() << index);
+    }
+}
+
+void SystemController::onBtAgentOutput()
+{
+    // Legacy placeholder; pairing agent is handled natively by BluezAgentAdaptor over D-Bus.
+}
+
+void SystemController::confirmPairing()
+{
+    if (m_bluezManager) {
+        m_bluezManager->confirmPairing();
+        qDebug() << "[Apex IVI] User confirmed pairing via BluezManager";
+    }
+    m_isPairingPromptActive = false;
+    m_isPairingAuthWaiting = false;
+    emit pairingPromptChanged();
+    emit pairingAuthWaitingChanged();
+    QTimer::singleShot(1000, this, &SystemController::refreshBluetoothDevices);
+}
+
+void SystemController::rejectPairing()
+{
+    m_isPairingPromptActive = false;
+    m_isPairingAuthWaiting = false;
+    m_isConnectingDevice = false;
+    emit pairingPromptChanged();
+    emit pairingAuthWaitingChanged();
+    emit connectingDeviceChanged();
+
+    if (m_bluezManager) {
+        if (!m_incomingPairingDeviceMac.isEmpty()) {
+            m_bluezManager->removeDevice(m_incomingPairingDeviceMac);
+        }
+        m_bluezManager->rejectPairing();
+        qDebug() << "[Apex IVI] User rejected/cancelled pairing via BluezManager";
+    }
+}
+
+void SystemController::cancelPairing()
+{
+    rejectPairing();
+}
+
+void SystemController::cancelConnectingDevice()
+{
+    rejectPairing();
+}
+
+void SystemController::setBluetoothDiscoverable(bool discoverable)
+{
+    qDebug() << "[Apex IVI] SystemController::setBluetoothDiscoverable:" << discoverable;
+    if (m_bluezManager) {
+        m_bluezManager->setDiscoverable(discoverable);
+    }
+}
+
+QVariantList SystemController::discoveredDeviceList() const
+{
+    return m_bluezManager ? m_bluezManager->discoveredDevices() : QVariantList();
+}
+
+bool SystemController::isDiscovering() const
+{
+    return m_bluezManager ? m_bluezManager->isDiscovering() : false;
+}
+
+void SystemController::startDiscovery()
+{
+    if (m_bluezManager) {
+        m_bluezManager->startDiscovery();
+    }
+}
+
+void SystemController::stopDiscovery()
+{
+    if (m_bluezManager) {
+        m_bluezManager->stopDiscovery();
+    }
+}
+
+void SystemController::pairAndConnectDevice(const QString &mac)
+{
+    if (m_bluezManager) {
+        m_bluezManager->pairDevice(mac);
     }
 }
 
@@ -1003,14 +1864,16 @@ void SystemController::setQuietModeEnabled(bool enabled)
         if (m_quietModeEnabled) {
             m_savedFaderBeforeQuietMode = m_fader;
             m_fader = 10; // Bias fader strictly to front seats (matching genuine car quiet mode)
-            if (m_audioOutput) m_audioOutput->setVolume(0.35f);
+            if (m_radioWorker) {
+                QMetaObject::invokeMethod(m_radioWorker, "setVolume", Qt::QueuedConnection, Q_ARG(float, 0.35f));
+            }
             qDebug() << "[Apex IVI] Quiet mode enabled: Audio focused on front seats, volume limited. Saved fader:" << m_savedFaderBeforeQuietMode;
         } else {
             m_fader = m_savedFaderBeforeQuietMode;
-            if (m_audioOutput) {
+            if (m_radioWorker) {
                 float norm = static_cast<float>(m_volume) / 45.0f;
                 float gain = std::clamp(norm * 0.30f + std::pow(norm, 0.70f) * 0.70f, 0.0f, 1.0f);
-                m_audioOutput->setVolume(gain);
+                QMetaObject::invokeMethod(m_radioWorker, "setVolume", Qt::QueuedConnection, Q_ARG(float, gain));
             }
             qDebug() << "[Apex IVI] Quiet mode disabled: Audio staging restored to fader:" << m_fader;
         }
@@ -1241,6 +2104,9 @@ void SystemController::moveBluetoothDevice(int fromIndex, int toIndex)
     saveBluetoothDeviceList();
     emit bluetoothDeviceListChanged();
     qDebug() << "[Apex IVI] Reordered Bluetooth devices from" << fromIndex << "to" << toIndex;
+
+    // Dynamically update Priority #1 phone telemetry!
+    updatePrimaryPhoneTelemetry(true);
 }
 
 void SystemController::saveBluetoothDeviceList()
@@ -1249,26 +2115,57 @@ void SystemController::saveBluetoothDeviceList()
     settings.setValue("bluetooth/deviceList", m_bluetoothDeviceList);
 }
 
-void SystemController::deleteMultipleBluetoothDevices(const QVariantList &indices)
+void SystemController::deleteDeviceByMac(const QString &mac)
 {
-    QList<int> sortedIndices;
-    for (const auto &var : indices) {
-        sortedIndices.append(var.toInt());
-    }
-    std::sort(sortedIndices.begin(), sortedIndices.end(), std::greater<int>());
-    for (int idx : sortedIndices) {
-        if (idx >= 0 && idx < m_bluetoothDeviceList.size()) {
-            qDebug() << "[Apex IVI] Removing device at index:" << idx;
-            m_bluetoothDeviceList.removeAt(idx);
+    deleteMultipleBluetoothDevices(QVariantList() << mac);
+}
+
+void SystemController::deleteMultipleBluetoothDevices(const QVariantList &items)
+{
+    static const QRegularExpression macRegex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$", QRegularExpression::CaseInsensitiveOption);
+    QStringList macsToRemove;
+    QList<int> indicesToRemove;
+
+    for (const auto &var : items) {
+        QString str = var.toString().trimmed().toUpper();
+        if (macRegex.match(str).hasMatch()) {
+            macsToRemove.append(str);
+        } else {
+            bool ok = false;
+            int idx = var.toInt(&ok);
+            if (ok && idx >= 0 && idx < m_bluetoothDeviceList.size()) {
+                QString m = m_bluetoothDeviceList[idx].toMap()["mac"].toString().trimmed().toUpper();
+                if (macRegex.match(m).hasMatch()) {
+                    macsToRemove.append(m);
+                }
+                indicesToRemove.append(idx);
+            }
         }
     }
+
+    macsToRemove.removeDuplicates();
+
+    // 1. Remove targeted devices from m_bluetoothDeviceList immediately (instant UI update, zero lag)
+    QVariantList remainingList;
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        QVariantMap dev = m_bluetoothDeviceList[i].toMap();
+        QString mac = dev["mac"].toString().trimmed().toUpper();
+        if ((!mac.isEmpty() && macsToRemove.contains(mac)) || indicesToRemove.contains(i)) {
+            qDebug() << "[Apex IVI] Removed from list:" << dev["name"].toString() << mac;
+            continue;
+        }
+        remainingList.append(dev);
+    }
+    m_bluetoothDeviceList = remainingList;
+
     if (m_activeDeviceIndex >= m_bluetoothDeviceList.size()) {
         m_activeDeviceIndex = m_bluetoothDeviceList.size() - 1;
     }
+
+    // Determine overall bluetooth connected state strictly from remaining devices
     bool anyConnected = false;
     for (const auto &d : m_bluetoothDeviceList) {
-        auto map = d.toMap();
-        if (map["handsFree"].toBool() || map["audio"].toBool()) {
+        if (d.toMap()["connected"].toBool()) {
             anyConnected = true;
             break;
         }
@@ -1276,27 +2173,1700 @@ void SystemController::deleteMultipleBluetoothDevices(const QVariantList &indice
     setBluetoothConnected(anyConnected);
     saveBluetoothDeviceList();
     emit bluetoothDeviceListChanged();
+
+    // If remaining devices exist and none is connected, auto-connect priority #1 device immediately
+    if (!anyConnected && !m_bluetoothDeviceList.isEmpty()) {
+        qDebug() << "[Apex IVI] Auto-connecting remaining priority device at index 0:"
+                 << m_bluetoothDeviceList[0].toMap()["name"].toString();
+        connectDevice(0);
+    }
+
+    // Immediately update primary phone telemetry (forceSync = true)
+    updatePrimaryPhoneTelemetry(true);
+
+    // 2. Dispatch unpair/remove to BlueZ asynchronously in background
+    for (const QString &mac : macsToRemove) {
+        m_recentlyRemovedMacs.insert(mac);
+        QTimer::singleShot(10000, this, [this, mac]() {
+            m_recentlyRemovedMacs.remove(mac);
+        });
+        qDebug() << "[Apex IVI] Unpairing and removing Bluetooth device via D-Bus:" << mac;
+        if (m_bluezManager) {
+            m_bluezManager->removeDevice(mac);
+        }
+    }
 }
 
 void SystemController::setVehicleName(const QString &name)
 {
-    if (m_vehicleName != name) {
-        m_vehicleName = name;
+    QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) return;
+    if (m_vehicleName != trimmed) {
+        m_vehicleName = trimmed;
         QSettings settings("Apex", "IVI");
         settings.setValue("bluetooth/vehicleName", m_vehicleName);
         emit vehicleNameChanged();
         qDebug() << "[Apex IVI] Vehicle name updated and persisted to:" << m_vehicleName;
     }
+    // Update BlueZ adapter Alias immediately via D-Bus (without restart)
+    if (m_bluezManager) {
+        m_bluezManager->setAdapterName(m_vehicleName);
+    }
+    // Update system pretty hostname so BlueZ matches across reboots
+    QString machineInfoCmd = QString("echo 'PRETTY_HOSTNAME=\"%1\"' > /etc/machine-info 2>/dev/null").arg(m_vehicleName);
+    QProcess::startDetached("sh", QStringList() << "-c" << machineInfoCmd);
 }
 
 void SystemController::setPasskey(const QString &key)
 {
-    if (m_passkey != key) {
-        m_passkey = key;
+    QString trimmed = key.trimmed();
+    if (trimmed.isEmpty()) return;
+    if (m_passkey != trimmed) {
+        m_passkey = trimmed;
         QSettings settings("Apex", "IVI");
         settings.setValue("bluetooth/passkey", m_passkey);
+        if (m_bluezManager) {
+            m_bluezManager->setPasskey(m_passkey);
+        }
         emit passkeyChanged();
         qDebug() << "[Apex IVI] Bluetooth passkey updated and persisted to:" << m_passkey;
+    }
+}
+
+void SystemController::refreshBluetoothDevices()
+{
+    // Filter out dummy mock names and items without valid MACs from current list
+    static const QRegularExpression macRegex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$", QRegularExpression::CaseInsensitiveOption);
+    QVariantList cleanedList;
+    for (const auto &item : m_bluetoothDeviceList) {
+        QVariantMap map = item.toMap();
+        QString devName = map["name"].toString().trimmed();
+        QString mac = map["mac"].toString().trimmed().toUpper();
+        if (devName.compare("Redmi Note 10", Qt::CaseInsensitive) == 0 ||
+            devName.compare("vivo T1 5G", Qt::CaseInsensitive) == 0 ||
+            devName.compare("vivo V29 Pro", Qt::CaseInsensitive) == 0 ||
+            devName.compare("Redmi Note 13 Pro 5G", Qt::CaseInsensitive) == 0 ||
+            devName.compare("Galaxy S24 Ultra", Qt::CaseInsensitive) == 0 ||
+            devName.compare("Pixel 9 Pro", Qt::CaseInsensitive) == 0 ||
+            devName.compare("OnePlus 12", Qt::CaseInsensitive) == 0 ||
+            devName.compare("Nothing Phone (2)", Qt::CaseInsensitive) == 0 ||
+            devName.contains("pebble", Qt::CaseInsensitive) ||
+            devName.contains("mouse", Qt::CaseInsensitive) ||
+            devName.contains("keyboard", Qt::CaseInsensitive) ||
+            (m_bluezManager && m_bluezManager->isInputDevice(mac)) ||
+            devName.isEmpty() ||
+            !macRegex.match(mac).hasMatch()) {
+            continue;
+        }
+        cleanedList.append(item);
+    }
+    m_bluetoothDeviceList = cleanedList;
+
+    QVariantList prevDeviceList = m_bluetoothDeviceList;
+
+    if (!m_bluezManager) return;
+
+    m_bluezManager->refreshAllManagedObjects();
+
+    // Scan actually paired devices from BlueZ ground truth via D-Bus ObjectManager
+    const QVariantList paired = m_bluezManager->pairedDevices();
+    QSet<QString> currentlyPairedMacs;
+
+    for (const auto &pVar : paired) {
+        QVariantMap pDev = pVar.toMap();
+        QString mac = pDev["mac"].toString().trimmed().toUpper();
+        QString devName = pDev["name"].toString().trimmed();
+        bool isConnected = pDev["connected"].toBool();
+
+        if (!macRegex.match(mac).hasMatch() || m_recentlyRemovedMacs.contains(mac)) {
+            continue;
+        }
+
+        currentlyPairedMacs.insert(mac);
+
+        // Check if device already exists in m_bluetoothDeviceList STRICTLY by MAC address
+        bool found = false;
+        for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+            QVariantMap d = m_bluetoothDeviceList[i].toMap();
+            if (d["mac"].toString().trimmed().compare(mac, Qt::CaseInsensitive) == 0) {
+                found = true;
+                d["mac"] = mac;
+                if (!devName.isEmpty()) {
+                    d["name"] = devName;
+                }
+                d["connected"] = isConnected;
+                if (isConnected) {
+                    // BlueZ Device1 only exposes a device-wide Connected state.
+                    // These flags are UI/profile state, so reset them when a phone
+                    // reconnects; otherwise a previous disconnect leaves a live
+                    // phone displayed as connected but with both profiles disabled.
+                    d["handsFree"] = true;
+                    d["audio"] = true;
+                } else {
+                    d["handsFree"] = false;
+                    d["audio"] = false;
+                }
+                m_bluetoothDeviceList[i] = d;
+                break;
+            }
+        }
+
+        if (!found) {
+            QVariantMap newDev;
+            newDev["name"] = devName.isEmpty() ? "Bluetooth Device" : devName;
+            newDev["mac"] = mac;
+            newDev["connected"] = isConnected;
+            newDev["handsFree"] = isConnected;
+            newDev["audio"] = isConnected;
+            m_bluetoothDeviceList.append(newDev);
+        }
+    }
+
+    // Update connected state for devices in m_bluetoothDeviceList
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        QVariantMap d = m_bluetoothDeviceList[i].toMap();
+        QString mac = d["mac"].toString().trimmed().toUpper();
+        if (!currentlyPairedMacs.isEmpty()) {
+            if (currentlyPairedMacs.contains(mac)) {
+                for (const auto &pVar : paired) {
+                    QVariantMap pDev = pVar.toMap();
+                    if (pDev["mac"].toString().trimmed().compare(mac, Qt::CaseInsensitive) == 0) {
+                        bool isConn = pDev["connected"].toBool();
+                        d["connected"] = isConn;
+                        if (isConn) {
+                            d["handsFree"] = true;
+                            d["audio"] = true;
+                        } else {
+                            d["handsFree"] = false;
+                            d["audio"] = false;
+                        }
+                        if (!pDev["name"].toString().trimmed().isEmpty()) {
+                            d["name"] = pDev["name"].toString().trimmed();
+                        }
+                        break;
+                    }
+                }
+            } else {
+                d["connected"] = false;
+                d["handsFree"] = false;
+                d["audio"] = false;
+            }
+        }
+        m_bluetoothDeviceList[i] = d;
+    }
+
+    // Only filter out devices that were explicitly removed by user / unpair
+    QVariantList validList;
+    for (const auto &item : m_bluetoothDeviceList) {
+        QVariantMap map = item.toMap();
+        QString mac = map["mac"].toString().trimmed().toUpper();
+        if (!m_recentlyRemovedMacs.contains(mac)) {
+            validList.append(item);
+        }
+    }
+    m_bluetoothDeviceList = validList;
+
+    // Set active device index
+    if (m_activeDeviceIndex >= m_bluetoothDeviceList.size() || m_activeDeviceIndex < 0) {
+        m_activeDeviceIndex = m_bluetoothDeviceList.isEmpty() ? -1 : 0;
+    }
+
+    // Determine overall bluetooth connected state
+    bool anyConnected = false;
+    QString activeName;
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        auto map = m_bluetoothDeviceList[i].toMap();
+        if (map["connected"].toBool()) {
+            anyConnected = true;
+            // Actively query battery level from connected device into cache
+            QString devMac = map["mac"].toString();
+            if (m_bluezManager) {
+                m_bluezManager->queryDeviceBattery(devMac);
+            }
+        }
+    }
+    setBluetoothConnected(anyConnected);
+
+    saveBluetoothDeviceList();
+    if (m_bluetoothDeviceList != prevDeviceList) {
+        emit bluetoothDeviceListChanged();
+        qDebug() << "[Apex IVI] Bluetooth device list updated. Count:" << m_bluetoothDeviceList.size() << "AnyConnected:" << anyConnected;
+        for (const auto &d : m_bluetoothDeviceList) {
+            QVariantMap m = d.toMap();
+            qDebug() << "  -> Device:" << m["name"].toString() << m["mac"].toString() << "Connected:" << m["connected"].toBool() << "HF:" << m["handsFree"].toBool() << "Audio:" << m["audio"].toBool();
+        }
+    }
+
+    // Dynamic telemetry: battery, cellular tower signal, contacts all sync with Priority #1 phone
+    updatePrimaryPhoneTelemetry(false);
+}
+
+void SystemController::refreshPhonebookData()
+{
+    m_callHistory.clear();
+    m_contactsList.clear();
+
+    // Caches are per phone.  A global contacts.vcf belongs to whichever phone
+    // synced last and must never be shown for a newly connected phone.
+    QString primaryMac = primaryConnectedPhoneMac();
+    QString cleanPrimaryMac = primaryMac;
+    cleanPrimaryMac.replace(':', '_');
+    QStringList contactCandidates;
+    if (!cleanPrimaryMac.isEmpty()) {
+        contactCandidates << QString("/root/.cache/obex/contacts_%1.vcf").arg(cleanPrimaryMac);
+    }
+
+    for (const QString &cPath : contactCandidates) {
+        QFile file(cPath);
+        if (file.exists() && file.size() > 0 && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&file);
+            QString currentName;
+            QString currentTel;
+            while (!in.atEnd()) {
+                QString line = in.readLine().trimmed();
+                if (line.startsWith("FN:", Qt::CaseInsensitive)) {
+                    currentName = line.mid(3).trimmed();
+                } else if (line.startsWith("FN;", Qt::CaseInsensitive)) {
+                    currentName = line.section(':', 1).trimmed();
+                } else if (line.startsWith("TEL", Qt::CaseInsensitive)) {
+                    QString num = line.section(':', 1).trimmed();
+                    if (currentTel.isEmpty()) currentTel = num;
+                } else if (line.compare("END:VCARD", Qt::CaseInsensitive) == 0) {
+                    if (!currentName.isEmpty() || !currentTel.isEmpty()) {
+                        QVariantMap contact;
+                        QString displayName = currentName.isEmpty() ? currentTel : currentName;
+                        contact["name"] = displayName;
+                        contact["number"] = currentTel;
+                        contact["initial"] = displayName.isEmpty() ? "#" : displayName.left(1).toUpper();
+                        m_contactsList.append(contact);
+                    }
+                    currentName.clear();
+                    currentTel.clear();
+                }
+            }
+            if (!m_contactsList.isEmpty()) {
+                std::sort(m_contactsList.begin(), m_contactsList.end(), [](const QVariant &a, const QVariant &b) {
+                    return a.toMap()["name"].toString().toLower() < b.toMap()["name"].toString().toLower();
+                });
+                break; // Found and loaded contacts
+            }
+        }
+    }
+
+    QStringList callCandidates;
+    if (!cleanPrimaryMac.isEmpty()) {
+        callCandidates << QString("/root/.cache/obex/calls_%1.vcf").arg(cleanPrimaryMac);
+    }
+
+    for (const QString &clPath : callCandidates) {
+        QFile file(clPath);
+        if (file.exists() && file.size() > 0 && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream in(&file);
+            QString currentName;
+            QString currentTel;
+            QString currentDate;
+            bool isIncoming = true;
+            bool isToday = false;
+            while (!in.atEnd()) {
+                QString line = in.readLine().trimmed();
+                if (line.startsWith("FN:", Qt::CaseInsensitive)) {
+                    currentName = line.mid(3).trimmed();
+                } else if (line.startsWith("FN;", Qt::CaseInsensitive)) {
+                    currentName = line.section(':', 1).trimmed();
+                } else if (line.startsWith("TEL", Qt::CaseInsensitive)) {
+                    currentTel = line.section(':', 1).trimmed();
+                } else if (line.startsWith("X-IRMC-CALL-DATETIME", Qt::CaseInsensitive)) {
+                    isIncoming = !line.contains("DIALED", Qt::CaseInsensitive);
+                    QString dtStr = line.section(':', 1).trimmed();
+                    QDateTime dt = QDateTime::fromString(dtStr.left(15), "yyyyMMddTHHmmss");
+                    if (!dt.isValid() && dtStr.contains("-")) {
+                        dt = QDateTime::fromString(dtStr.left(19), Qt::ISODate);
+                    }
+                    if (dt.isValid()) {
+                        if (dt.date() == QDate::currentDate()) {
+                            currentDate = dt.toString("h:mm AP");
+                            isToday = true;
+                        } else {
+                            currentDate = dt.toString("dd-MM-yyyy");
+                            isToday = false;
+                        }
+                    } else {
+                        currentDate = "Recent";
+                    }
+                } else if (line.compare("END:VCARD", Qt::CaseInsensitive) == 0) {
+                    if (!currentName.isEmpty() || !currentTel.isEmpty()) {
+                        QVariantMap call;
+                        QString displayName = currentName.isEmpty() ? currentTel : currentName;
+                        call["name"] = displayName;
+                        call["number"] = currentTel;
+                        call["date"] = currentDate.isEmpty() ? "Recent" : currentDate;
+                        call["isToday"] = isToday;
+                        call["isIncoming"] = isIncoming;
+                        m_callHistory.append(call);
+                    }
+                    currentName.clear();
+                    currentTel.clear();
+                    currentDate.clear();
+                    isIncoming = true;
+                    isToday = false;
+                }
+            }
+            if (!m_callHistory.isEmpty()) {
+                break; // Found and loaded call history
+            }
+        }
+    }
+
+    // If no synced call history was parsed from storage, provide realistic automotive call history
+    if (false && m_callHistory.isEmpty()) {
+        struct CallEntry {
+            const char *name;
+            const char *number;
+            const char *date;
+            bool isToday;
+            bool isIncoming;
+        };
+
+        static const CallEntry defaultCalls[] = {
+            { "Liam Vance", "+1 (555) 349-2810", "9:05 AM", true, true },
+            { "Sophia Carter", "+1 (555) 912-4029", "09-02-2024", false, false },
+            { "Marcus Brody", "+1 (555) 781-6450", "09-02-2024", false, true },
+            { "Emma Watson", "+1 (555) 438-1923", "09-02-2024", false, false },
+            { "Alexander Wright", "+1 (555) 890-3341", "08-02-2024", false, true },
+            { "Mom", "+1 (555) 201-9988", "08-02-2024", false, true },
+            { "Daniel Craig", "+1 (555) 672-1144", "08-02-2024", false, false },
+            { "Office", "+1 (555) 330-8700", "07-02-2024", false, true },
+            { "Olivia Wilde", "+1 (555) 914-5521", "07-02-2024", false, true },
+            { "David Beckham", "+1 (555) 762-3409", "06-02-2024", false, false },
+            { "Lucas Grey", "+1 (555) 881-2290", "06-02-2024", false, true },
+            { "Elena Rostova", "+1 (555) 449-0182", "05-02-2024", false, true },
+            { "Noah Bennett", "+1 (555) 312-9087", "04-02-2024", false, false },
+            { "Harper Lee", "+1 (555) 674-8832", "03-02-2024", false, true },
+            { "Jameson Miller", "+1 (555) 298-7711", "02-02-2024", false, false },
+            { "Charlotte Moore", "+1 (555) 831-6640", "01-02-2024", false, true }
+        };
+
+        for (const auto &c : defaultCalls) {
+            QVariantMap call;
+            call["name"] = QString::fromUtf8(c.name);
+            call["number"] = QString::fromUtf8(c.number);
+            call["date"] = QString::fromUtf8(c.date);
+            call["isToday"] = c.isToday;
+            call["isIncoming"] = c.isIncoming;
+            m_callHistory.append(call);
+        }
+    }
+
+    // If no synced contacts were parsed from storage, provide rich alphabetized contacts
+    if (false && m_contactsList.isEmpty()) {
+        struct ContactEntry {
+            const char *name;
+            const char *number;
+            const char *initial;
+        };
+
+        static const ContactEntry defaultContacts[] = {
+            { "911 Emergency", "911", "#" },
+            { "411 Information", "411", "#" },
+            { "Aaron Adams", "+1 (555) 102-3948", "A" },
+            { "Alexander Wright", "+1 (555) 890-3341", "A" },
+            { "Alice Cooper", "+1 (555) 234-5678", "A" },
+            { "Amelia Stone", "+1 (555) 345-6789", "A" },
+            { "Andrew Scott", "+1 (555) 456-7890", "A" },
+            { "Benjamin Clark", "+1 (555) 567-8901", "B" },
+            { "Blake Foster", "+1 (555) 678-9012", "B" },
+            { "Brandon Lee", "+1 (555) 789-0123", "B" },
+            { "Cameron Diaz", "+1 (555) 890-1234", "C" },
+            { "Catherine Zeta", "+1 (555) 901-2345", "C" },
+            { "Charlotte Moore", "+1 (555) 831-6640", "C" },
+            { "Daniel Craig", "+1 (555) 672-1144", "D" },
+            { "David Beckham", "+1 (555) 762-3409", "D" },
+            { "Dominic Toretto", "+1 (555) 123-4567", "D" },
+            { "Edward Norton", "+1 (555) 234-5670", "E" },
+            { "Elena Rostova", "+1 (555) 449-0182", "E" },
+            { "Emma Watson", "+1 (555) 438-1923", "E" },
+            { "Ethan Hunt", "+1 (555) 567-8909", "E" },
+            { "Fiona Gallagher", "+1 (555) 678-9010", "F" },
+            { "Frank Sinatra", "+1 (555) 789-0121", "F" },
+            { "Gabriel Macht", "+1 (555) 890-1232", "G" },
+            { "George Clooney", "+1 (555) 901-2343", "G" },
+            { "Grace Kelly", "+1 (555) 123-4564", "G" },
+            { "Harper Lee", "+1 (555) 674-8832", "H" },
+            { "Harrison Ford", "+1 (555) 345-6786", "H" },
+            { "Home", "+1 (555) 111-2222", "H" },
+            { "Ian McKellen", "+1 (555) 567-8908", "I" },
+            { "Isaac Newton", "+1 (555) 678-9019", "I" },
+            { "Jack Sparrow", "+1 (555) 789-0120", "J" },
+            { "Jameson Miller", "+1 (555) 298-7711", "J" },
+            { "John Wick", "+1 (555) 901-2342", "J" },
+            { "Kate Winslet", "+1 (555) 123-4563", "K" },
+            { "Keanu Reeves", "+1 (555) 234-5674", "K" },
+            { "Leonardo DiCaprio", "+1 (555) 345-6785", "L" },
+            { "Liam Vance", "+1 (555) 349-2810", "L" },
+            { "Lucas Grey", "+1 (555) 881-2290", "L" },
+            { "Marcus Brody", "+1 (555) 781-6450", "M" },
+            { "Margot Robbie", "+1 (555) 678-9018", "M" },
+            { "Mom", "+1 (555) 201-9988", "M" },
+            { "Morgan Freeman", "+1 (555) 890-1230", "M" },
+            { "Natalie Portman", "+1 (555) 901-2341", "N" },
+            { "Noah Bennett", "+1 (555) 312-9087", "N" },
+            { "Office", "+1 (555) 330-8700", "O" },
+            { "Olivia Wilde", "+1 (555) 914-5521", "O" },
+            { "Patrick Stewart", "+1 (555) 234-5673", "P" },
+            { "Paul Walker", "+1 (555) 345-6784", "P" },
+            { "Peter Parker", "+1 (555) 456-7895", "P" },
+            { "Quentin Tarantino", "+1 (555) 567-8906", "Q" },
+            { "Rachel McAdams", "+1 (555) 678-9017", "R" },
+            { "Robert Downey Jr", "+1 (555) 789-0128", "R" },
+            { "Samuel L Jackson", "+1 (555) 890-1239", "S" },
+            { "Scarlett Johansson", "+1 (555) 901-2340", "S" },
+            { "Sophia Carter", "+1 (555) 912-4029", "S" },
+            { "Steve Jobs", "+1 (555) 123-4562", "S" },
+            { "Thomas Shelby", "+1 (555) 234-5672", "T" },
+            { "Tom Cruise", "+1 (555) 345-6783", "T" },
+            { "Tony Stark", "+1 (555) 456-7894", "T" },
+            { "Uma Thurman", "+1 (555) 567-8905", "U" },
+            { "Victor Creed", "+1 (555) 678-9016", "V" },
+            { "Victoria Beckham", "+1 (555) 789-0127", "V" },
+            { "Walter White", "+1 (555) 890-1238", "W" },
+            { "William Shakespeare", "+1 (555) 901-2349", "W" },
+            { "Xavier Woods", "+1 (555) 123-4560", "X" },
+            { "Yannick Bisson", "+1 (555) 234-5671", "Y" },
+            { "Zac Efron", "+1 (555) 345-6782", "Z" },
+            { "Zendaya Coleman", "+1 (555) 456-7893", "Z" }
+        };
+
+        for (const auto &ct : defaultContacts) {
+            QVariantMap contact;
+            contact["name"] = QString::fromUtf8(ct.name);
+            contact["number"] = QString::fromUtf8(ct.number);
+            contact["initial"] = QString::fromUtf8(ct.initial);
+            m_contactsList.append(contact);
+        }
+        m_contactsCount = 357; // Match Photo 2: "Entire list (357)"
+    } else {
+        m_contactsCount = m_contactsList.size();
+    }
+
+    m_callHistoryCount = m_callHistory.size();
+    emit callHistoryChanged();
+    emit callHistoryCountChanged();
+    emit contactsListChanged();
+    emit contactsCountChanged();
+    qDebug() << "[Apex IVI] Phonebook data refreshed from storage. Contacts:" << m_contactsCount << "Calls:" << m_callHistoryCount;
+}
+
+int SystemController::getFirstContactIndexForLetter(const QString &letter)
+{
+    if (letter.isEmpty()) return 0;
+    QString target = letter.trimmed().toUpper();
+    for (int i = 0; i < m_contactsList.size(); ++i) {
+        QString name = m_contactsList[i].toMap()["name"].toString().trimmed().toUpper();
+        if (target == "#") {
+            if (!name.isEmpty() && !name.at(0).isLetter()) return i;
+        } else {
+            if (!name.isEmpty() && name.startsWith(target)) return i;
+            if (!name.isEmpty() && name.at(0) >= target.at(0)) return i;
+        }
+    }
+    return 0;
+}
+
+void SystemController::dialNumber(const QString &number)
+{
+    QString cleanedNumber = number.trimmed();
+    QString dialDigits;
+    for (const QChar &ch : cleanedNumber) {
+        if (ch.isDigit() || ch == '+' || ch == '*' || ch == '#') {
+            dialDigits.append(ch);
+        }
+    }
+    if (dialDigits.isEmpty()) {
+        qDebug() << "[Apex IVI] Cannot dial empty number";
+        return;
+    }
+
+    qDebug() << "[Apex IVI] Dialing number on mobile phone:" << dialDigits << "Original:" << number;
+
+    // Find connected phone MAC
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) {
+        targetMac = "auto";
+    }
+
+    // Temporarily pause polling timer so it doesn't collide with the dial command on RFCOMM
+    if (m_callMonitorTimer) {
+        m_callMonitorTimer->stop();
+    }
+
+    acquireCallAudioFocus();
+
+    m_bluetoothCallActive = true;
+    m_bluetoothCallStatus = "calling";
+    m_bluetoothCallNumber = dialDigits;
+    m_bluetoothCallName = number;
+    m_currentCallWasIncoming = false;
+    m_currentCallWasAnswered = false;
+    m_currentTrackedCallNumber = dialDigits;
+    m_dialStartedTimestamp = QDateTime::currentMSecsSinceEpoch();
+    m_noCallCount = 0;
+    emit bluetoothCallActiveChanged();
+    emit bluetoothCallStatusChanged();
+    emit bluetoothCallNumberChanged();
+    emit bluetoothCallNameChanged();
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this, proc, dialDigits, number](int exitCode, QProcess::ExitStatus exitStatus) {
+        const QString response = QString::fromUtf8(proc->readAllStandardOutput());
+        proc->deleteLater();
+        // A dialer animation is not proof that Android accepted ATD.  Keep
+        // the IVI honest and do not add a phantom outgoing history item.
+        if (exitStatus != QProcess::NormalExit || exitCode != 0
+            || response.contains("ERROR") || response.contains("CONNECT_FAILED")) {
+            qWarning() << "[Apex IVI] Phone rejected HFP dial command:" << response.trimmed();
+            m_bluetoothCallActive = false;
+            m_bluetoothCallStatus = "idle";
+            m_dialStartedTimestamp = 0;
+            emit bluetoothCallActiveChanged();
+            emit bluetoothCallStatusChanged();
+            emit remoteCallEnded();
+            releaseCallAudioFocus();
+        } else {
+            recordCallToHistory(dialDigits, number, false);
+        }
+        QTimer::singleShot(500, this, [this]() {
+            if (m_callMonitorTimer) m_callMonitorTimer->start();
+        });
+    });
+
+    proc->start("/usr/bin/apex-hfp-call", QStringList() << "dial" << targetMac << dialDigits);
+}
+
+void SystemController::hangUpCall()
+{
+    qDebug() << "[Apex IVI] Hanging up active call on mobile phone";
+    m_lastHangupTimestamp = QDateTime::currentMSecsSinceEpoch();
+
+    // Immediately terminate local call UI so IVI reflects hangup with 0ms latency
+    if (m_bluetoothCallActive) {
+        finalizeTrackedCallHistory();
+        m_bluetoothCallActive = false;
+        m_bluetoothCallStatus = "ended";
+        m_dialStartedTimestamp = 0;
+        m_noCallCount = 0;
+        emit bluetoothCallActiveChanged();
+        emit bluetoothCallStatusChanged();
+        emit remoteCallEnded();
+        releaseCallAudioFocus();
+        scheduleCallHistoryRefresh();
+    }
+
+    if (m_hangupInProgress) {
+        qDebug() << "[Apex IVI] Hang-up already in progress; ignoring duplicate tap";
+        return;
+    }
+    m_hangupInProgress = true;
+
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) targetMac = "auto";
+
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this, proc](int exitCode, QProcess::ExitStatus exitStatus) {
+        Q_UNUSED(exitCode);
+        Q_UNUSED(exitStatus);
+        proc->deleteLater();
+        m_hangupInProgress = false;
+        if (m_callMonitorTimer && !m_callMonitorTimer->isActive()) {
+            m_callMonitorTimer->start();
+        }
+    });
+
+    QTimer::singleShot(2500, proc, [this, proc]() {
+        if (proc && proc->state() != QProcess::NotRunning) {
+            proc->kill();
+            proc->deleteLater();
+            m_hangupInProgress = false;
+            if (m_callMonitorTimer && !m_callMonitorTimer->isActive()) {
+                m_callMonitorTimer->start();
+            }
+        }
+    });
+
+    proc->start("/usr/bin/apex-hfp-call", QStringList() << "hangup" << targetMac);
+}
+
+void SystemController::answerCall()
+{
+    qDebug() << "[Apex IVI] Answering incoming call on mobile phone";
+
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) targetMac = "auto";
+
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), proc, &QObject::deleteLater);
+
+    QString cmd = QString("/usr/bin/apex-hfp-call answer %1").arg(targetMac);
+    proc->start("/bin/sh", QStringList() << "-c" << cmd);
+}
+
+void SystemController::sendQuickReply(const QString &number, const QString &message)
+{
+    const QString mac = primaryConnectedPhoneMac();
+    QString recipient = number.trimmed();
+    QString body = message.trimmed();
+    recipient.remove(QRegularExpression(QStringLiteral("[^0-9+*#]")));
+
+    if (mac.isEmpty() || recipient.isEmpty() || body.isEmpty()) {
+        emit quickReplyFinished(false, QStringLiteral("Unable to send: phone or caller number is unavailable"));
+        return;
+    }
+
+    // A Bluetooth MAP quick reply rejects the ringing call immediately, which
+    // matches production IVI behaviour. Message delivery then continues through
+    // obexd and reports a permission/profile error back to the UI if necessary.
+    hangUpCall();
+
+    const QString filePath = QStringLiteral("/tmp/apex-quick-reply-%1.bmsg")
+                                 .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    QByteArray bodyBytes = body.toUtf8();
+    QByteArray bmsg;
+    bmsg += "BEGIN:BMSG\r\nVERSION:1.0\r\nSTATUS:UNREAD\r\nTYPE:SMS_GSM\r\n";
+    bmsg += "FOLDER:telecom/msg/outbox\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nEND:VCARD\r\n";
+    bmsg += "BEGIN:BENV\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nTEL:" + recipient.toUtf8();
+    bmsg += "\r\nEND:VCARD\r\nBEGIN:BBODY\r\nCHARSET:UTF-8\r\nLENGTH:";
+    bmsg += QByteArray::number(bodyBytes.size());
+    bmsg += "\r\nBEGIN:MSG\r\n" + bodyBytes + "\r\nEND:MSG\r\nEND:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n";
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) || file.write(bmsg) != bmsg.size()) {
+        emit quickReplyFinished(false, QStringLiteral("Unable to prepare the quick reply"));
+        return;
+    }
+    file.close();
+
+    QDBusMessage create = QDBusMessage::createMethodCall(
+        QStringLiteral("org.bluez.obex"), QStringLiteral("/org/bluez/obex"),
+        QStringLiteral("org.bluez.obex.Client1"), QStringLiteral("CreateSession"));
+    QVariantMap options;
+    options.insert(QStringLiteral("Target"), QStringLiteral("map"));
+    create << mac << options;
+
+    auto *sessionWatcher = new QDBusPendingCallWatcher(
+        QDBusConnection::systemBus().asyncCall(create, 10000), this);
+    connect(sessionWatcher, &QDBusPendingCallWatcher::finished, this,
+            [this, sessionWatcher, filePath](QDBusPendingCallWatcher *watcher) {
+        QDBusPendingReply<QDBusObjectPath> reply = *watcher;
+        watcher->deleteLater();
+        if (reply.isError()) {
+            QFile::remove(filePath);
+            qWarning() << "[Apex IVI] MAP session failed:" << reply.error().message();
+            emit quickReplyFinished(false,
+                QStringLiteral("Enable Message access for this car in the phone's Bluetooth settings"));
+            return;
+        }
+
+        const QDBusObjectPath session = reply.value();
+        QDBusMessage push = QDBusMessage::createMethodCall(
+            QStringLiteral("org.bluez.obex"), session.path(),
+            QStringLiteral("org.bluez.obex.MessageAccess1"), QStringLiteral("PushMessage"));
+        push << filePath << QStringLiteral("telecom/msg/outbox") << QVariantMap{};
+
+        auto *pushWatcher = new QDBusPendingCallWatcher(
+            QDBusConnection::systemBus().asyncCall(push, 10000), this);
+        connect(pushWatcher, &QDBusPendingCallWatcher::finished, this,
+                [this, pushWatcher, filePath, session](QDBusPendingCallWatcher *pushCall) {
+            const bool failed = pushCall->isError();
+            const QString error = failed ? pushCall->error().message() : QString();
+            pushCall->deleteLater();
+
+            QTimer::singleShot(8000, this, [filePath, session]() {
+                QFile::remove(filePath);
+                QDBusMessage remove = QDBusMessage::createMethodCall(
+                    QStringLiteral("org.bluez.obex"), QStringLiteral("/org/bluez/obex"),
+                    QStringLiteral("org.bluez.obex.Client1"), QStringLiteral("RemoveSession"));
+                remove << QVariant::fromValue(session);
+                QDBusConnection::systemBus().asyncCall(remove);
+            });
+
+            if (failed) {
+                qWarning() << "[Apex IVI] MAP PushMessage failed:" << error;
+                emit quickReplyFinished(false,
+                    QStringLiteral("Message was not sent; allow Message access on the phone"));
+            } else {
+                emit quickReplyFinished(true, QStringLiteral("Quick reply sent"));
+            }
+        });
+    });
+}
+
+void SystemController::sendDtmf(const QString &digit)
+{
+    qDebug() << "[Apex IVI] Transmitting in-call DTMF digit:" << digit;
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) targetMac = "auto";
+    if (digit.isEmpty()) return;
+
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), proc, &QObject::deleteLater);
+
+    QString cmd = QString("/usr/bin/apex-hfp-call dtmf %1 %2").arg(targetMac, digit.left(1));
+    proc->start("/bin/sh", QStringList() << "-c" << cmd);
+}
+
+void SystemController::setCallMuted(bool mute)
+{
+    qDebug() << "[Apex IVI] Setting call mute state:" << mute;
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) return;
+
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), proc, &QObject::deleteLater);
+    proc->start("/usr/bin/apex-hfp-call",
+                QStringList() << "mute" << targetMac << (mute ? "1" : "0"));
+}
+
+void SystemController::pollBluetoothCallState()
+{
+    if (m_isCheckingCallState) return;
+
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) {
+        if (m_bluetoothCallActive) {
+            m_bluetoothCallActive = false;
+            m_bluetoothCallStatus = "idle";
+            m_dialStartedTimestamp = 0;
+            m_noCallCount = 0;
+            emit bluetoothCallActiveChanged();
+            emit bluetoothCallStatusChanged();
+            emit remoteCallEnded();
+            releaseCallAudioFocus();
+        }
+        return;
+    }
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_dialStartedTimestamp > 0 && (now - m_dialStartedTimestamp < 3500)) {
+        // Give phone 3.5 seconds to initiate the dial before checking status
+        return;
+    }
+
+    m_isCheckingCallState = true;
+    QProcess *proc = new QProcess(this);
+    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this, [this, proc](int exitCode, QProcess::ExitStatus status) {
+        Q_UNUSED(exitCode);
+        Q_UNUSED(status);
+        QString output = QString::fromUtf8(proc->readAllStandardOutput());
+        proc->deleteLater();
+        m_isCheckingCallState = false;
+        parseCallStateOutput(output);
+    });
+
+    // Watchdog timer: prevent m_isCheckingCallState from hanging if process stalls
+    QTimer::singleShot(2500, proc, [this, proc]() {
+        if (proc && proc->state() != QProcess::NotRunning) {
+            proc->kill();
+            proc->deleteLater();
+            m_isCheckingCallState = false;
+        }
+    });
+
+    QString cmd = QString("/usr/bin/apex-hfp-call status %1").arg(targetMac);
+    proc->start("/bin/sh", QStringList() << "-c" << cmd);
+}
+
+void SystemController::parseCallStateOutput(const QString &output)
+{
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastHangupTimestamp > 0 && (now - m_lastHangupTimestamp < 4000)) {
+        // Cooldown period right after hangup: do NOT resurrect the call!
+        return;
+    }
+
+    // If command failed due to momentary socket contention, track consecutive failures
+    if (output.contains("CONNECT_FAILED")) {
+        if (m_bluetoothCallActive) {
+            m_noCallCount++;
+            if (m_noCallCount >= 1) {
+                qDebug() << "[Apex IVI] Telephony connection failed during active call; releasing call UI.";
+                finalizeTrackedCallHistory();
+                m_bluetoothCallActive = false;
+                m_bluetoothCallStatus = "ended";
+                m_dialStartedTimestamp = 0;
+                m_noCallCount = 0;
+                m_lastHangupTimestamp = now;
+                emit bluetoothCallActiveChanged();
+                emit bluetoothCallStatusChanged();
+                emit remoteCallEnded();
+                releaseCallAudioFocus();
+                scheduleCallHistoryRefresh();
+            }
+        }
+        return;
+    }
+
+    // 1. Live Cellular Signal Tower & Battery from +CIND
+    int cindIdx = output.indexOf("+CIND:");
+    if (cindIdx != -1) {
+        int endLine = output.indexOf("\n", cindIdx);
+        if (endLine == -1) endLine = output.length();
+        QString cindLine = output.mid(cindIdx + 6, endLine - (cindIdx + 6)).trimmed();
+        QStringList parts = cindLine.split(',');
+        if (parts.size() >= 6) {
+            bool okSig = false, okBatt = false;
+            int sig = parts[3].trimmed().toInt(&okSig);   // signal (0-5)
+            int batt = parts[5].trimmed().toInt(&okBatt); // battchg (0-5)
+
+            if (okSig) {
+                int scaledSignal = qBound(0, (sig * 4) / 5, 4);
+                if (sig > 0 && scaledSignal == 0) scaledSignal = 1;
+                m_signalTelemetryPhoneMac = primaryConnectedPhoneMac();
+                setPhoneSignalLevel(scaledSignal);
+            }
+
+            if (okBatt) {
+                // HFP battchg can be 0..5 tier or 0..100 percentage
+                int percent = (batt > 5) ? qBound(0, batt, 100) : qBound(0, batt * 20, 100);
+                setPhoneBatteryLevel(percent);
+
+                QString primaryMac = primaryConnectedPhoneMac();
+                for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+                    auto map = m_bluetoothDeviceList[i].toMap();
+                    if (map["mac"].toString().compare(primaryMac, Qt::CaseInsensitive) == 0) {
+                        map["battery"] = percent;
+                        m_bluetoothDeviceList[i] = map;
+                        break;
+                    }
+                }
+            }
+            qDebug() << "[Apex IVI] Live HFP Telemetry -> Raw Signal:" << sig << "Raw Battery:" << batt;
+        }
+    }
+
+    // Cellular operator / carrier name from +COPS: "<Carrier>"
+    int copsIdx = output.indexOf("+COPS:");
+    if (copsIdx != -1) {
+        int quoteStart = output.indexOf("\"", copsIdx);
+        if (quoteStart != -1) {
+            int quoteEnd = output.indexOf("\"", quoteStart + 1);
+            if (quoteEnd != -1) {
+                QString carrier = output.mid(quoteStart + 1, quoteEnd - quoteStart - 1).trimmed();
+                if (!carrier.isEmpty() && m_cellularCarrierName != carrier) {
+                    m_cellularCarrierName = carrier;
+                    emit cellularCarrierNameChanged();
+                }
+            }
+        }
+    }
+
+    // 2. Call status from +CLCC
+    QRegularExpression clccRegex(QStringLiteral("\\+CLCC:\\s*(\\d+),(\\d+),(\\d+),(\\d+),(\\d+)(?:,\"?([^\",]*)\"?)?"));
+    QRegularExpressionMatch match = clccRegex.match(output);
+
+    if (match.hasMatch()) {
+        const int direction = match.captured(2).toInt();
+        int stat = match.captured(3).toInt();
+        QString number = match.captured(6).trimmed();
+        if (number.isEmpty() && !m_bluetoothCallNumber.isEmpty()) {
+            number = m_bluetoothCallNumber;
+        }
+
+        // Check for disconnected/terminating state (GSM / 3GPP stat 6 = disconnected, 7 = terminating)
+        if (stat >= 6) {
+            if (m_bluetoothCallActive) {
+                qDebug() << "[Apex IVI] +CLCC reports call disconnected (stat=" << stat << ")! Ending call.";
+                finalizeTrackedCallHistory();
+                m_bluetoothCallActive = false;
+                m_bluetoothCallStatus = "ended";
+                m_dialStartedTimestamp = 0;
+                m_noCallCount = 0;
+                m_lastHangupTimestamp = QDateTime::currentMSecsSinceEpoch();
+                emit bluetoothCallActiveChanged();
+                emit bluetoothCallStatusChanged();
+                emit remoteCallEnded();
+                releaseCallAudioFocus();
+                scheduleCallHistoryRefresh();
+            }
+            return;
+        }
+
+        m_noCallCount = 0;
+        // Once oFono has matched any call state, cancel the initial dialing grace period
+        m_dialStartedTimestamp = 0;
+
+        QString status = "calling";
+        if (stat == 0) {
+            status = "active";
+        } else if (stat == 1) {
+            status = "held";
+        } else if (stat == 2 || stat == 3) {
+            status = "calling";
+        } else if (stat == 4 || stat == 5) {
+            status = "incoming";
+        }
+
+        // Contact Name lookup from phonebook contacts
+        QString name = number;
+        for (const auto &item : m_contactsList) {
+            auto map = item.toMap();
+            QString cNum = map["number"].toString().trimmed();
+            QString cleanCNum;
+            for (const QChar &ch : cNum) if (ch.isDigit()) cleanCNum.append(ch);
+            QString cleanNum;
+            for (const QChar &ch : number) if (ch.isDigit()) cleanNum.append(ch);
+
+            if (!cleanCNum.isEmpty() && !cleanNum.isEmpty() &&
+                (cleanCNum.endsWith(cleanNum) || cleanNum.endsWith(cleanCNum))) {
+                name = map["name"].toString();
+                break;
+            }
+        }
+
+        bool wasActive = m_bluetoothCallActive;
+        QString oldStatus = m_bluetoothCallStatus;
+
+        m_bluetoothCallActive = true;
+        m_bluetoothCallStatus = status;
+        m_bluetoothCallNumber = number;
+        m_bluetoothCallName = name;
+
+        if (!wasActive) {
+            m_currentCallWasIncoming = (direction == 1 || status == "incoming");
+            m_currentCallWasAnswered = (status == "active");
+            m_currentTrackedCallNumber = number;
+            acquireCallAudioFocus();
+            qDebug() << "[Apex IVI] Detected phone call initiated on mobile phone! Number:" << number << "Name:" << name << "Status:" << status;
+            emit bluetoothCallActiveChanged();
+            emit bluetoothCallStatusChanged();
+            emit bluetoothCallNumberChanged();
+            emit bluetoothCallNameChanged();
+            emit remoteCallStarted(name, number, status);
+            recordCallToHistory(number, name, m_currentCallWasIncoming);
+        } else {
+            if (oldStatus != status) {
+                if (status == "active") m_currentCallWasAnswered = true;
+                qDebug() << "[Apex IVI] Phone call status updated:" << oldStatus << "->" << status;
+                emit bluetoothCallStatusChanged();
+                emit remoteCallStatusChanged(status);
+            }
+        }
+    } else {
+        // No active call detected in +CLCC output
+        if (m_bluetoothCallActive) {
+            qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (m_dialStartedTimestamp > 0 && (now - m_dialStartedTimestamp < 3500)) {
+                // Within 3.5-second dialing grace period, wait
+                return;
+            }
+
+            // If phone returned status without active +CLCC, call has ended on the phone or remote caller!
+            m_noCallCount++;
+            if (m_noCallCount >= 1) { // Immediate termination
+                qDebug() << "[Apex IVI] Phone call ended on mobile phone or remote caller! Syncing to IVI.";
+                finalizeTrackedCallHistory();
+                m_bluetoothCallActive = false;
+                m_bluetoothCallStatus = "ended";
+                m_dialStartedTimestamp = 0;
+                m_noCallCount = 0;
+                m_lastHangupTimestamp = now;
+                emit bluetoothCallActiveChanged();
+                emit bluetoothCallStatusChanged();
+                emit remoteCallEnded();
+                releaseCallAudioFocus();
+                scheduleCallHistoryRefresh();
+            }
+        }
+    }
+}
+
+QString SystemController::resolveBluetoothPlayerPath() const
+{
+    if (!m_cachedPlayerPath.isEmpty()) return m_cachedPlayerPath;
+    QString mac = primaryConnectedPhoneMac().toUpper();
+    if (mac.isEmpty()) {
+        for (const auto &item : m_bluetoothDeviceList) {
+            auto map = item.toMap();
+            if (map.value("connected").toBool() && !map.value("isInput").toBool()) {
+                mac = map.value("mac").toString().trimmed().toUpper();
+                if (!mac.isEmpty()) break;
+            }
+        }
+    }
+    if (mac.isEmpty()) return QString();
+    mac.replace(':', '_');
+    return QString("/org/bluez/hci0/dev_%1/player0").arg(mac);
+}
+
+void SystemController::setBluetoothMediaPlayback(bool play)
+{
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (playerPath.isEmpty()) {
+        qWarning() << "[Apex IVI] Cannot" << (play ? "Play" : "Pause") << "- no Bluetooth player path resolved!";
+        return;
+    }
+    qDebug() << "[Apex IVI] Sending" << (play ? "Play" : "Pause") << "to" << playerPath;
+    // Async call: D-Bus roundtrip never blocks the Qt event loop.
+    // No confirmation poll is scheduled here — the optimistic UI update in
+    // bluetoothMediaPlay/Pause is authoritative for 3 s (AVRCP propagation
+    // window).  The regular 2-second monitor timer picks up the phone's real
+    // state after that window expires.
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        "org.bluez", playerPath, "org.bluez.MediaPlayer1", play ? "Play" : "Pause");
+    auto *watcher = new QDBusPendingCallWatcher(
+        QDBusConnection::systemBus().asyncCall(msg), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+        [watcher, playerPath, play](QDBusPendingCallWatcher *) {
+            QDBusPendingReply<> reply = *watcher;
+            if (reply.isError()) {
+                qWarning() << "[Apex IVI] MediaPlayer1" << (play ? "Play" : "Pause")
+                           << "failed on" << playerPath << ":" << reply.error().message();
+            } else {
+                qDebug() << "[Apex IVI] MediaPlayer1" << (play ? "Play" : "Pause")
+                         << "succeeded on" << playerPath;
+            }
+            watcher->deleteLater();
+        });
+}
+
+void SystemController::bluetoothMediaPlay()
+{
+    // HIGHEST PRIORITY 1: Phone call blocks all media
+    if (m_callAudioFocusActive || m_bluetoothCallActive) {
+        qWarning() << "[Apex IVI Audio Priority] Cannot play Bluetooth music: Active phone call in progress!";
+        return;
+    }
+
+    // HIGHEST MEDIA PRIORITY 2: Turn off FM/AM Radio immediately
+    if (m_radioPlaying) {
+        qDebug() << "[Apex IVI Audio Priority] Bluetooth Play triggered -> Turning off FM/AM Radio";
+        stopRadio();
+    }
+    m_selectedMediaSource = "bluetooth";
+    emit selectedMediaSourceChanged();
+
+    m_bluetoothAutoPlayInhibited = false;
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
+    // Optimistic update: button responds instantly, no waiting for AVRCP round-trip.
+    m_bluetoothPlaybackStatus = "playing";
+    emit bluetoothPlaybackStatusChanged();
+    setBluetoothMediaPlayback(true);
+}
+
+void SystemController::bluetoothMediaPause()
+{
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
+    // Optimistic update: button responds instantly.
+    m_bluetoothPlaybackStatus = "paused";
+    emit bluetoothPlaybackStatusChanged();
+    setBluetoothMediaPlayback(false);
+}
+
+void SystemController::toggleBluetoothMediaPlayback()
+{
+    if (m_bluetoothPlaybackStatus == "playing") {
+        bluetoothMediaPause();
+    } else {
+        bluetoothMediaPlay();
+    }
+}
+
+void SystemController::bluetoothMediaNext()
+{
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (!playerPath.isEmpty()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall(
+            "org.bluez", playerPath, "org.bluez.MediaPlayer1", "Next");
+        auto *watcher = new QDBusPendingCallWatcher(
+            QDBusConnection::systemBus().asyncCall(msg), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [watcher](QDBusPendingCallWatcher *) {
+                watcher->deleteLater();
+            });
+    }
+    m_bluetoothTrackPositionMs = 0;
+    emit bluetoothTrackPositionChanged();
+}
+
+void SystemController::bluetoothMediaPrevious()
+{
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (!playerPath.isEmpty()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall(
+            "org.bluez", playerPath, "org.bluez.MediaPlayer1", "Previous");
+        auto *watcher = new QDBusPendingCallWatcher(
+            QDBusConnection::systemBus().asyncCall(msg), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this,
+            [watcher](QDBusPendingCallWatcher *) {
+                watcher->deleteLater();
+            });
+    }
+    m_bluetoothTrackPositionMs = 0;
+    emit bluetoothTrackPositionChanged();
+}
+
+void SystemController::toggleBluetoothRepeat()
+{
+    if (m_bluetoothRepeatMode == "off") m_bluetoothRepeatMode = "alltracks";
+    else if (m_bluetoothRepeatMode == "alltracks") m_bluetoothRepeatMode = "singletrack";
+    else m_bluetoothRepeatMode = "off";
+    emit bluetoothRepeatModeChanged();
+
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (!playerPath.isEmpty()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall("org.bluez", playerPath, "org.freedesktop.DBus.Properties", "Set");
+        msg << "org.bluez.MediaPlayer1" << "Repeat" << QVariant::fromValue(QDBusVariant(m_bluetoothRepeatMode));
+        QDBusConnection::systemBus().send(msg);
+    }
+}
+
+void SystemController::toggleBluetoothShuffle()
+{
+    m_bluetoothShuffleMode = !m_bluetoothShuffleMode;
+    emit bluetoothShuffleModeChanged();
+
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (!playerPath.isEmpty()) {
+        QDBusMessage msg = QDBusMessage::createMethodCall("org.bluez", playerPath, "org.freedesktop.DBus.Properties", "Set");
+        msg << "org.bluez.MediaPlayer1" << "Shuffle" << QVariant::fromValue(QDBusVariant(QString(m_bluetoothShuffleMode ? "alltracks" : "off")));
+        QDBusConnection::systemBus().send(msg);
+    }
+}
+
+void SystemController::seekBluetoothTrackPosition(int positionMs)
+{
+    m_bluetoothTrackPositionMs = qMax(0, qMin(positionMs, m_bluetoothTrackDurationMs));
+    emit bluetoothTrackPositionChanged();
+}
+
+void SystemController::fetchAlbumArt(const QString &title, const QString &artist)
+{
+    updateBluetoothAlbumArt(title, artist);
+}
+
+void SystemController::updateBluetoothAlbumArt(const QString &title, const QString &artist)
+{
+    QString query = (title + " " + artist).trimmed();
+    if (query.isEmpty() || query == "No Media Playing" || query == "Loading...") return;
+
+    m_albumArtFlip = 1 - m_albumArtFlip;
+    const QString targetFile = QString("/tmp/apex_bt_album_art_%1.jpg").arg(m_albumArtFlip);
+
+    QProcess *artProc = new QProcess(this);
+    connect(artProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+        [this, artProc, targetFile](int exitCode, QProcess::ExitStatus) {
+            artProc->deleteLater();
+            if (exitCode == 0 && QFile::exists(targetFile)) {
+                m_bluetoothAlbumArtUrl = QString("file://%1").arg(targetFile);
+                emit bluetoothAlbumArtUrlChanged();
+                qDebug() << "[Apex IVI] Live album art updated:" << m_bluetoothAlbumArtUrl;
+            }
+        });
+    if (QFile::exists("/usr/bin/apex-fetch-artwork.py")) {
+        artProc->start("/usr/bin/apex-fetch-artwork.py", QStringList() << query << targetFile);
+    } else {
+        artProc->start("python3", QStringList() << "-c"
+            << QString("import sys, json, urllib.request, urllib.parse, shutil\n"
+               "q = urllib.parse.quote(sys.argv[1])\n"
+               "target = sys.argv[2]\n"
+               "url = f'https://itunes.apple.com/search?term={q}&entity=song&limit=1'\n"
+               "req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})\n"
+               "try:\n"
+               "    with urllib.request.urlopen(req, timeout=5) as r:\n"
+               "        d = json.loads(r.read().decode('utf-8'))\n"
+               "        if d.get('resultCount', 0) > 0:\n"
+               "            art = d['results'][0]['artworkUrl100'].replace('100x100bb', '600x600bb')\n"
+               "            urllib.request.urlretrieve(art, target)\n"
+               "            try: shutil.copyfile(target, '/tmp/apex_bt_album_art.jpg')\n"
+               "            except Exception: pass\n"
+               "except Exception:\n"
+               "    pass\n")
+            << query << targetFile);
+    }
+}
+
+void SystemController::pollBluetoothMediaPlayer()
+{
+    const QString playerPath = resolveBluetoothPlayerPath();
+    if (playerPath.isEmpty()) {
+        m_cachedPlayerPath.clear();
+        if (!m_bluetoothConnected) {
+            if (!m_bluetoothTrackTitle.isEmpty() || !m_bluetoothTrackArtist.isEmpty() || m_bluetoothPlaybackStatus != "stopped") {
+                m_bluetoothTrackTitle.clear();
+                m_bluetoothTrackArtist.clear();
+                m_bluetoothTrackAlbum.clear();
+                m_bluetoothPlaybackStatus = "stopped";
+                m_bluetoothTrackPositionMs = 0;
+                m_bluetoothTrackDurationMs = 0;
+                emit bluetoothTrackChanged();
+                emit bluetoothPlaybackStatusChanged();
+                emit bluetoothTrackPositionChanged();
+            }
+        }
+        return;
+    }
+
+    // Guard: only one outstanding async D-Bus call at a time.
+    if (m_btPollProcActive) return;
+    m_btPollProcActive = true;
+
+    // ---- Pure async QDBus: no subprocess, no fork/exec, no event-loop stall ----
+    // QDBusPendingCallWatcher delivers the reply on the Qt event loop without
+    // blocking the audio real-time path.  This replaces the busctl QProcess
+    // that was the primary cause of PipeWire missed deadlines and audio glitches.
+    QDBusMessage getAll = QDBusMessage::createMethodCall(
+        "org.bluez", playerPath,
+        "org.freedesktop.DBus.Properties", "GetAll");
+    getAll << QString("org.bluez.MediaPlayer1");
+
+    auto *watcher = new QDBusPendingCallWatcher(
+        QDBusConnection::systemBus().asyncCall(getAll), this);
+
+    connect(watcher, &QDBusPendingCallWatcher::finished, this,
+        [this, watcher, playerPath](QDBusPendingCallWatcher *) {
+            watcher->deleteLater();
+            m_btPollProcActive = false;
+
+            QDBusPendingReply<QVariantMap> reply = *watcher;
+            if (reply.isError()) {
+                // BlueZ may not have registered the player object yet, or path is alternate.
+                if (playerPath.endsWith("/player0")) {
+                    QString alt = playerPath;
+                    alt.replace("/player0", "/player1");
+                    m_cachedPlayerPath = alt;
+                } else {
+                    m_cachedPlayerPath.clear();
+                }
+                return;
+            }
+
+            m_cachedPlayerPath = playerPath;
+            const QVariantMap props = reply.value();
+
+            // Helper: GetAll returns a{sv}; each value may be QDBusVariant-wrapped.
+            auto dbusUnwrap = [](const QVariant &v) -> QVariant {
+                if (v.canConvert<QDBusVariant>())
+                    return v.value<QDBusVariant>().variant();
+                return v;
+            };
+
+            // --- Status ---
+            // IMPORTANT: Do NOT overwrite the status for 3 seconds after any
+            // Play/Pause/Next/Previous command.  AVRCP can take 200–800 ms to
+            // propagate the command to the phone; reading back during that
+            // window returns the old status and flips the UI back (causing the
+            // double-play / double-pause the user reported).
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            const bool commandProtectionActive = (nowMs - m_lastMediaCommandMs) < 3000;
+
+            if (props.contains("Status") && !commandProtectionActive) {
+                QString st = dbusUnwrap(props.value("Status")).toString();
+                if (st == "playing" && m_bluetoothAutoPlayInhibited && m_currentScreen != "bluetooth_audio") {
+                    qDebug() << "[Apex IVI] Boot auto-play inhibited (screen:" << m_currentScreen << ") -> Pausing";
+                    setBluetoothMediaPlayback(false);
+                    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
+                    st = "paused";
+                }
+                // HIGHEST MEDIA PRIORITY: If phone started playing Bluetooth music, stop FM/AM radio immediately
+                if (st == "playing" && m_radioPlaying) {
+                    qDebug() << "[Apex IVI Audio Priority] Phone started Bluetooth playback -> Stopping FM/AM Radio";
+                    stopRadio();
+                    m_selectedMediaSource = "bluetooth";
+                    emit selectedMediaSourceChanged();
+                }
+                if (st != m_bluetoothPlaybackStatus) {
+                    m_bluetoothPlaybackStatus = st;
+                    emit bluetoothPlaybackStatusChanged();
+                }
+            }
+
+            // --- Track metadata (inside the "Track" a{sv} sub-dict) ---
+            bool trackChanged = false;
+            QVariantMap track;
+            if (props.contains("Track")) {
+                QVariant trackVar = props.value("Track");
+                if (trackVar.canConvert<QDBusArgument>()) {
+                    const QDBusArgument arg = trackVar.value<QDBusArgument>();
+                    arg >> track;
+                } else {
+                    track = trackVar.toMap();
+                }
+                for (auto it = track.begin(); it != track.end(); ++it) {
+                    if (it.value().canConvert<QDBusVariant>()) {
+                        it.value() = it.value().value<QDBusVariant>().variant();
+                    }
+                }
+            }
+
+            auto getString = [&](const QString &key) -> QString {
+                return track.value(key).toString();
+            };
+            auto getUInt = [&](const QString &key) -> quint32 {
+                return track.value(key).toUInt();
+            };
+
+
+            // Title
+            QString t = getString("Title");
+            if (t != m_bluetoothTrackTitle) { m_bluetoothTrackTitle = t; trackChanged = true; }
+
+            // Artist
+            QString a = getString("Artist");
+            if (a != m_bluetoothTrackArtist) { m_bluetoothTrackArtist = a; trackChanged = true; }
+
+            // Album
+            QString al = getString("Album");
+            if (al != m_bluetoothTrackAlbum) { m_bluetoothTrackAlbum = al; trackChanged = true; }
+
+            // Duration (in milliseconds per BlueZ spec)
+            quint32 dur = getUInt("Duration");
+            if (dur != (quint32)m_bluetoothTrackDurationMs) {
+                m_bluetoothTrackDurationMs = (int)dur;
+                trackChanged = true;
+            }
+
+            // Position (top-level property, not inside Track)
+            if (props.contains("Position")) {
+                quint32 pos = dbusUnwrap(props.value("Position")).toUInt();
+                if (qAbs((int)pos - m_bluetoothTrackPositionMs) > 1500 || m_bluetoothTrackPositionMs == 0) {
+                    m_bluetoothTrackPositionMs = (int)pos;
+                    emit bluetoothTrackPositionChanged();
+                }
+            }
+
+            if (trackChanged) {
+                qDebug() << "[Apex IVI] BT Track Changed -> Title:" << m_bluetoothTrackTitle
+                         << "Artist:" << m_bluetoothTrackArtist
+                         << "Status:" << m_bluetoothPlaybackStatus;
+                emit bluetoothTrackChanged();
+                cycleRandomScenicBackground();
+                if (!m_bluetoothTrackTitle.isEmpty()) {
+                    updateBluetoothAlbumArt(m_bluetoothTrackTitle, m_bluetoothTrackArtist);
+                }
+            }
+        });
+}
+
+void SystemController::acquireCallAudioFocus()
+{
+    if (m_callAudioFocusActive) return;
+    m_callAudioFocusActive = true;
+
+    m_resumeRadioAfterCall = m_radioPlaying;
+    m_resumeVoiceMemoAfterCall = m_isPlayingVoiceMemo;
+    m_resumeBluetoothMediaAfterCall = (m_bluetoothPlaybackStatus == "playing" || m_selectedMediaSource == "bluetooth");
+
+    // ABSOLUTE PRIORITY 1: Silence all media immediately when phone call starts
+    if (m_resumeRadioAfterCall) {
+        pauseRadio();
+    }
+    if (m_resumeVoiceMemoAfterCall) {
+        pauseVoiceMemo();
+    }
+    if (m_resumeBluetoothMediaAfterCall) {
+        setBluetoothMediaPlayback(false);
+        m_bluetoothPlaybackStatus = "paused";
+        emit bluetoothPlaybackStatusChanged();
+    }
+
+    qDebug() << "[Apex IVI Audio Priority] Phone Call acquired ABSOLUTE #1 priority. Paused Radio:"
+             << m_resumeRadioAfterCall << "Voice memo:" << m_resumeVoiceMemoAfterCall
+             << "Bluetooth media:" << m_resumeBluetoothMediaAfterCall;
+}
+
+void SystemController::releaseCallAudioFocus()
+{
+    if (!m_callAudioFocusActive) return;
+    m_callAudioFocusActive = false;
+
+    // Restore previous media if it was playing before call
+    if (m_resumeRadioAfterCall && m_radioWorker) {
+        m_radioPlaying = true;
+        emit radioStateChanged();
+        QMetaObject::invokeMethod(m_radioWorker, "resume", Qt::QueuedConnection);
+    }
+    if (m_resumeVoiceMemoAfterCall && m_memoPlayer) {
+        m_memoPlayer->play();
+    }
+    if (m_resumeBluetoothMediaAfterCall) {
+        setBluetoothMediaPlayback(true);
+        m_bluetoothPlaybackStatus = "playing";
+        emit bluetoothPlaybackStatusChanged();
+    }
+
+    qDebug() << "[Apex IVI Audio Priority] Call ended. Audio focus restored to previous source.";
+    m_resumeRadioAfterCall = false;
+    m_resumeVoiceMemoAfterCall = false;
+    m_resumeBluetoothMediaAfterCall = false;
+}
+
+QString SystemController::primaryConnectedPhoneMac() const
+{
+    // Preserve the explicit active phone across refreshes.  This is vital
+    // when a mouse, projection receiver, or a second phone is also connected.
+    if (m_activeDeviceIndex >= 0 && m_activeDeviceIndex < m_bluetoothDeviceList.size()) {
+        auto active = m_bluetoothDeviceList[m_activeDeviceIndex].toMap();
+        QString mac = active["mac"].toString().trimmed().toUpper();
+        if (active["connected"].toBool() && !active["isInput"].toBool()
+            && (!m_bluezManager || !m_bluezManager->isInputDevice(mac))) {
+            return mac;
+        }
+    }
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        auto m = m_bluetoothDeviceList[i].toMap();
+        QString mac = m["mac"].toString().trimmed().toUpper();
+        if (m_bluezManager && m_bluezManager->isInputDevice(mac)) continue;
+        if (m["connected"].toBool() && !m["isInput"].toBool()) {
+            return m["mac"].toString();
+        }
+    }
+    return QString();
+}
+
+void SystemController::updatePrimaryPhoneTelemetry(bool forceSync)
+{
+    QString primaryMac;
+    QString primaryName;
+    int primaryIndex = -1;
+
+    for (int i = 0; i < m_bluetoothDeviceList.size(); ++i) {
+        auto m = m_bluetoothDeviceList[i].toMap();
+        QString mac = m["mac"].toString().trimmed().toUpper();
+        if (m_bluezManager && m_bluezManager->isInputDevice(mac)) continue;
+        if (m["connected"].toBool() && !m["isInput"].toBool()) {
+            primaryMac = m["mac"].toString();
+            primaryName = m["name"].toString();
+            primaryIndex = i;
+            break;
+        }
+    }
+
+    if (!primaryMac.isEmpty()) {
+        qDebug() << "[Apex IVI] Dynamic Priority Phone:" << primaryName << primaryMac << "at priority index:" << primaryIndex;
+
+        setBluetoothConnected(true);
+        if (!m_phoneConnected) {
+            m_phoneConnected = true;
+            emit phoneConnectionChanged();
+        }
+
+        m_activeDeviceIndex = primaryIndex;
+        if (m_detectedBluetoothName != primaryName) {
+            m_detectedBluetoothName = primaryName;
+            emit detectedBluetoothNameChanged();
+        }
+
+        // 1. Dynamic Battery level of Priority 1 Phone
+        if (m_bluezManager) {
+            int bat = m_bluezManager->getDeviceBattery(primaryMac);
+            if (bat >= 0) {
+                setPhoneBatteryLevel(bat);
+            }
+        }
+
+        // 2. Cellular signal is optional HFP telemetry.  Never invent a
+        // full-strength value: show unknown until this specific phone reports
+        // it, and clear the previous phone's value on a phone switch.
+        if (m_signalTelemetryPhoneMac.compare(primaryMac, Qt::CaseInsensitive) != 0) {
+            m_signalTelemetryPhoneMac = primaryMac;
+            setPhoneSignalLevel(0);
+        }
+
+        // 3. Dynamic Phonebook & Call History sync of Priority 1 Phone
+        if (m_pbapManager && (forceSync || m_lastSyncedPhoneMac != primaryMac)) {
+            m_lastSyncedPhoneMac = primaryMac;
+            qDebug() << "[Apex IVI] Triggering PBAP sync for priority phone:" << primaryMac << "(force:" << forceSync << ")";
+            if (forceSync) {
+                m_pbapManager->syncPhone(primaryMac);
+            } else {
+                // Android may emit Device1.Connected before its PBAP RFCOMM
+                // service is ready; wait briefly before the automatic sync.
+                QTimer::singleShot(3500, this, [this, primaryMac]() {
+                    if (m_pbapManager && primaryConnectedPhoneMac().compare(primaryMac, Qt::CaseInsensitive) == 0) {
+                        m_pbapManager->syncPhone(primaryMac);
+                    }
+                });
+            }
+        }
+    } else {
+        qDebug() << "[Apex IVI] No connected phone found for primary telemetry.";
+        m_lastSyncedPhoneMac.clear();
+        m_signalTelemetryPhoneMac.clear();
+        m_cellularCarrierName.clear();
+        emit cellularCarrierNameChanged();
+        m_activeDeviceIndex = -1;
+        setPhoneBatteryLevel(0);
+        setPhoneSignalLevel(0);
+        setBluetoothConnected(false);
+        if (m_phoneConnected) {
+            m_phoneConnected = false;
+            emit phoneConnectionChanged();
+        }
+        if (m_detectedBluetoothName != "No Device Connected") {
+            m_detectedBluetoothName = "No Device Connected";
+            emit detectedBluetoothNameChanged();
+        }
+        m_callHistory.clear();
+        m_contactsList.clear();
+        emit callHistoryChanged();
+        emit contactsListChanged();
+    }
+}
+
+void SystemController::syncBluetoothContacts()
+{
+    qDebug() << "[Apex IVI] Syncing contacts and call history for Priority #1 phone...";
+
+    QString targetMac = primaryConnectedPhoneMac();
+    if (!targetMac.isEmpty() && m_pbapManager) {
+        qDebug() << "[Apex IVI] Syncing phonebook contacts for target phone:" << targetMac;
+        m_pbapManager->syncPhone(targetMac);
+    } else {
+        qWarning() << "[Apex IVI] No connected phone found to sync. Refreshing existing local cache.";
+        refreshPhonebookData();
+    }
+}
+
+void SystemController::syncRecentCallHistory()
+{
+    if (m_bluetoothCallActive) return;
+
+    QString targetMac = primaryConnectedPhoneMac();
+    if (!targetMac.isEmpty() && m_pbapManager) {
+        qDebug() << "[Apex IVI] Auto-refreshing recent call history for phone:" << targetMac;
+        m_pbapManager->syncPhone(targetMac);
+    }
+}
+
+void SystemController::scheduleCallHistoryRefresh()
+{
+    // Android updates its PBAP call folders shortly after the telephony state
+    // changes. Pull once after that commit window and retry later if another
+    // OBEX operation was still finishing.
+    QTimer::singleShot(3000, this, [this]() { syncRecentCallHistory(); });
+    QTimer::singleShot(12000, this, [this]() { syncRecentCallHistory(); });
+}
+
+void SystemController::finalizeTrackedCallHistory()
+{
+    if (m_currentCallWasIncoming && !m_currentCallWasAnswered) {
+        auto normalizedNumber = [](const QString &value) {
+            QString result;
+            for (const QChar &ch : value) if (ch.isDigit()) result.append(ch);
+            return result;
+        };
+        const QString tracked = normalizedNumber(m_currentTrackedCallNumber);
+        auto markMissed = [&tracked, &normalizedNumber](QVariantList &entries) {
+            for (int i = 0; i < entries.size(); ++i) {
+                QVariantMap call = entries[i].toMap();
+                if (normalizedNumber(call.value("number").toString()) != tracked) continue;
+                const QString type = call.value("type").toString().toUpper();
+                if (type != "INCOMING" && type != "RECEIVED") continue;
+                call["type"] = QStringLiteral("MISSED");
+                call["isMissed"] = true;
+                call["isIncoming"] = false;
+                entries[i] = call;
+                return true;
+            }
+            return false;
+        };
+        const bool changed = markMissed(m_callHistory);
+        markMissed(m_localCallHistoryPending);
+        if (changed) {
+            qDebug() << "[Apex IVI] Finalized unanswered incoming call as MISSED:"
+                     << m_currentTrackedCallNumber;
+            emit callHistoryChanged();
+        }
+    }
+    m_currentCallWasIncoming = false;
+    m_currentCallWasAnswered = false;
+    m_currentTrackedCallNumber.clear();
+}
+
+void SystemController::recordCallToHistory(const QString &number, const QString &name, bool isIncoming)
+{
+    if (number.isEmpty()) return;
+
+    QString displayName = name;
+    if (displayName.isEmpty() || displayName == number) {
+        // Look up in contacts
+        for (const auto &item : m_contactsList) {
+            auto map = item.toMap();
+            QString cNum = map["number"].toString().trimmed();
+            QString cleanCNum;
+            for (const QChar &ch : cNum) if (ch.isDigit()) cleanCNum.append(ch);
+            QString cleanNum;
+            for (const QChar &ch : number) if (ch.isDigit()) cleanNum.append(ch);
+            if (!cleanCNum.isEmpty() && !cleanNum.isEmpty() &&
+                (cleanCNum.endsWith(cleanNum) || cleanNum.endsWith(cleanCNum))) {
+                displayName = map["name"].toString();
+                break;
+            }
+        }
+    }
+    if (displayName.isEmpty()) displayName = number;
+
+    QDateTime now = QDateTime::currentDateTime();
+    QVariantMap call;
+    call["name"] = displayName;
+    call["number"] = number;
+    call["date"] = now.toString("h:mm AP");
+    call["isToday"] = true;
+    call["isIncoming"] = isIncoming;
+    call["type"] = isIncoming ? "INCOMING" : "OUTGOING";
+    call["timestamp"] = now.toMSecsSinceEpoch();
+
+    m_callHistory.prepend(call);
+    m_localCallHistoryPending.prepend(call);
+    if (m_callHistory.size() > 25) {
+        m_callHistory = m_callHistory.mid(0, 25);
+    }
+    m_callHistoryCount = m_callHistory.size();
+    emit callHistoryChanged();
+    emit callHistoryCountChanged();
+
+    // Persist to cache file so it stays saved across reboots
+    QString targetMac = primaryConnectedPhoneMac();
+    if (targetMac.isEmpty()) targetMac = "default";
+    QString cleanMac = targetMac;
+    cleanMac.replace(':', '_');
+    QString vcfPath = QString("/root/.cache/obex/calls_%1.vcf").arg(cleanMac);
+
+    QFile file(vcfPath);
+    if (file.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream out(&file);
+        out << "BEGIN:VCARD\r\n";
+        out << "VERSION:2.1\r\n";
+        out << "FN:" << displayName << "\r\n";
+        out << "TEL;CELL:" << number << "\r\n";
+        if (isIncoming) {
+            out << "X-IRMC-CALL-DATETIME;RECEIVED:" << now.toString("yyyyMMddTHHmmss") << "\r\n";
+        } else {
+            out << "X-IRMC-CALL-DATETIME;DIALED:" << now.toString("yyyyMMddTHHmmss") << "\r\n";
+        }
+        out << "END:VCARD\r\n";
+        file.close();
+    }
+    qDebug() << "[Apex IVI] Recorded new call to history:" << displayName << number << (isIncoming ? "Incoming" : "Outgoing");
+}
+
+void SystemController::setPhoneBatteryLevel(int level)
+{
+    int clamped = qBound(0, level, 100);
+    if (m_phoneBatteryLevel != clamped) {
+        m_phoneBatteryLevel = clamped;
+        emit phoneBatteryLevelChanged();
+    }
+}
+
+void SystemController::setPhoneSignalLevel(int level)
+{
+    int clamped = qBound(0, level, 4);
+    if (m_phoneSignalLevel != clamped) {
+        m_phoneSignalLevel = clamped;
+        emit phoneSignalLevelChanged();
     }
 }
 
@@ -1447,7 +4017,7 @@ void SystemController::reportActivity()
         setDisplayOff(false);
     }
     if (m_inactivityTimer && m_currentScreen != "loading") {
-        m_inactivityTimer->start(20000);
+        m_inactivityTimer->start(180000);
     }
 }
 
@@ -2021,12 +4591,14 @@ void SystemController::setVolume(int v)
     int clamped = std::clamp(v, 0, 45);
     if (m_volume != clamped) {
         m_volume = clamped;
-        if (m_audioOutput) {
-            float norm = static_cast<float>(m_volume) / 45.0f;
-            float gain = std::clamp(norm * 0.30f + std::pow(norm, 0.70f) * 0.70f, 0.0f, 1.0f);
-            m_audioOutput->setVolume(gain);
+        float norm = static_cast<float>(m_volume) / 45.0f;
+        float gain = std::clamp(norm * 0.30f + std::pow(norm, 0.70f) * 0.70f, 0.0f, 1.0f);
+        if (m_radioWorker) {
+            QMetaObject::invokeMethod(m_radioWorker, "setVolume", Qt::QueuedConnection, Q_ARG(float, gain));
         }
-        qDebug() << "[Apex IVI] Master volume adjusted to:" << m_volume;
+        int pct = std::clamp(static_cast<int>(gain * 100.0f), 0, 100);
+        QProcess::startDetached("amixer", QStringList() << "-c" << "1" << "sset" << "PCM" << (QString::number(pct) + "%"));
+        qDebug() << "[Apex IVI] Master volume adjusted to:" << m_volume << "(ALSA gain:" << pct << "%)";
         emit volumeChanged();
     }
 }
@@ -2040,5 +4612,3 @@ void SystemController::decreaseVolume()
 {
     setVolume(m_volume - 1);
 }
-
-
