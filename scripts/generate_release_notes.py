@@ -6,47 +6,59 @@
 # ==============================================================================
 
 import sys
-import os
-import re
 
 def generate(tag):
-    v = tag.lstrip('v')
-    notes = ''
-    readme_path = 'README.md'
-    if os.path.exists(readme_path):
-        with open(readme_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        pattern = rf'## Release Notes[^\n]*{re.escape(v)}[\s\S]*?(?=\n---\n|\n## Release Notes|\Z)'
-        match = re.search(pattern, content)
-        if match:
-            notes = match.group(0).strip()
+    body = f"""## Apex HORIZON MidEnd IVI - Automotive In-Vehicle Infotainment {tag}
 
-    body = f"## Apex MidEnd IVI - Automotive In-Vehicle Infotainment - {tag}\n\n"
-    body += "### Downloadable Prebuilt Archives\n"
-    body += "| Platform | Archive Package | Architecture |\n"
-    body += "| :--- | :--- | :--- |\n"
-    body += "| **Ubuntu Linux** | `ApexIVI-Ubuntu-x86_64.zip` | x86_64 (glibc / X11 / OpenGL) |\n"
-    body += "| **macOS** | `ApexIVI-macOS.zip` | Universal (Apple Silicon & Intel) |\n"
-    body += "| **Windows** | `ApexIVI-Windows-x64.zip` | x64 (Standalone with Qt Runtime DLLs) |\n\n"
+### Key Subsystems & Features in {tag}
 
-    body += "### System Highlights\n"
-    body += "- **Dual-Card Cockpit Home**: Live FM tuner metadata & phone projection\n"
-    body += "- **Full Two-Tone Radio**: Cyan FM/AM badge with crisp white frequency digits & live Icecast streams\n"
-    body += "- **DRVM Camera & Assist**: Reverse guidelines with ultrasonic obstacle radar\n"
-    body += "- **Voice Memo Studio**: Dynamic waveform audio visualizer & storage management\n"
-    body += "- **OEM Volume HUD**: Auto-dismissing bottom floating slider\n\n"
+#### 1. Bluetooth Audio & Modern Media Card
+- **Centered Typography**: Completely overhauled Bluetooth media player UI with centered titles and artist labels (`font.pixelSize: 44` / `25`), matching broadcast FM/AM specifications.
+- **AVRCP & Metadata Synchronization**: Real-time parsing of track title, artist name, playback position, and album art fallback with BlueZ 5 AVRCP integration.
+- **PipeWire Audio Sink**: High-fidelity wireless audio streaming over A2DP directly into the vehicle audio pipeline.
 
-    if notes:
-        body += "---\n\n" + notes + "\n"
-    else:
-        body += "See [README.md](https://github.com/skrehanahamed/Apex_MidEnd_IVI#readme) for full documentation, subsystem architecture, and build guides.\n\n"
+#### 2. PBAP Bluetooth Phonebook Synchronization
+- **Direct Contact Pulling**: Direct integration with OpenOBEX and D-Bus PBAP profiles (`telecom/pb.vcf`) from paired smartphones.
+- **High-Performance vCard Parser**: Asynchronous parsing supporting vCard 2.1 and 3.0 formats into an indexed contact list.
+- **Fast Contact Search**: Instant alphanumeric search filter and auto-generated initials avatars.
 
-    body += "<sub>Made with ❤️ by **Sk Rehan** and with the help of **Antigravity** and **ChatGPT**</sub>\n"
+#### 3. OEM Telephony Subsystem & Active In-Call Management
+- **Full Automotive Phone Screen**: Integrated dial pad, recent call logs (incoming, outgoing, missed), speed dials, and device pairing management.
+- **Active In-Call Screen UI**:
+  - Live call duration timer and contact identity display.
+  - Aligned End Call, Mic Mute, and Private/Hands-Free mode toggles.
+  - Exact geometric alignment matching the right-hand sidebar keypad controls.
+- **Deterministic Audio Prioritization**:
+  - Incoming or active phone calls automatically pause background radio and Bluetooth media playback.
+  - Media playback resumes smoothly when the call ends.
+
+#### 4. Live Broadcast Radio & Direct Indian Streams
+- **Direct Stream Acceleration**: Integrated high-speed, direct AAC/MP3 Indian radio streams for instantaneous playback.
+- **Rotary Tuning Optimization**: Debounced frequency rolling and seek controls with persistent favorite memory presets.
+- **Perceptual Loudness Curve**: Natural volume response curve across system audio channels.
+
+#### 5. Cross-Platform Engine & Dynamic Resolution
+- Full compatibility with Qt 6.5+ across Linux (x86_64 / ARM64), macOS (Universal), and Windows 10/11.
+- Dynamic screen resizing and aspect ratio adaptation for 8-inch, 10.25-inch, and standard Display Audio panels.
+
+---
+
+### Downloadable Prebuilt Archives
+| Platform | Archive Package | Architecture |
+| :--- | :--- | :--- |
+| **Ubuntu Linux** | `ApexIVI-Ubuntu-x86_64.zip` | x86_64 (glibc / X11 / OpenGL) |
+| **macOS** | `ApexIVI-macOS.zip` | Universal (Apple Silicon & Intel) |
+| **Windows** | `ApexIVI-Windows-x64.zip` | x64 (Standalone with Qt Runtime DLLs) |
+
+See [README.md](https://github.com/skrehanahamed/Apex_MidEnd_IVI#readme) for full system architecture, build guides, and hardware documentation.
+
+<sub>Engineered by **Sk Rehan Ahamed** | Automotive Digital Cockpit Systems</sub>
+"""
 
     with open('release_body.md', 'w', encoding='utf-8') as out:
         out.write(body)
     print(f"Generated release_body.md for {tag}")
 
 if __name__ == '__main__':
-    tag_arg = sys.argv[1] if len(sys.argv) > 1 else 'v1.0.0'
+    tag_arg = sys.argv[1] if len(sys.argv) > 1 else 'v1.1.0'
     generate(tag_arg)
