@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 3.20)
 # [VERSION_CONFIG] Update version numbers below when new release is given:
 # ============================================================================
 set(APEX_IVI_VERSION_MAJOR 1)
-set(APEX_IVI_VERSION_MINOR 0)
+set(APEX_IVI_VERSION_MINOR 1)
 set(APEX_IVI_VERSION_PATCH 0)
 set(APEX_IVI_VERSION_STRING "v${APEX_IVI_VERSION_MAJOR}.${APEX_IVI_VERSION_MINOR}.${APEX_IVI_VERSION_PATCH}")
 

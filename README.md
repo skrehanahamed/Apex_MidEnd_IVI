@@ -8,11 +8,11 @@
 
 [![Platform](https://img.shields.io/badge/Platform-Qt%206%20%7C%20C%2B%2B20-41CD52.svg?style=for-the-badge&logo=qt&logoColor=white)](https://www.qt.io/)
 [![Standard](https://img.shields.io/badge/Standard-ISO%2026262%20%7C%20MISRA%20C%2B%2B-00599C.svg?style=for-the-badge&logo=c%2B%2B&logoColor=white)](https://isocpp.org/)
-[![Version](https://img.shields.io/badge/Version-v1.0.0-007ACC.svg?style=for-the-badge&logo=semver)](CMakeLists.txt)
+[![Version](https://img.shields.io/badge/Version-v1.1.0-007ACC.svg?style=for-the-badge&logo=semver)](CMakeLists.txt)
 [![macOS CI](https://img.shields.io/badge/macOS%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=apple)](.github/workflows/build-macos.yml)
 [![Ubuntu CI](https://img.shields.io/badge/Ubuntu%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=ubuntu)](.github/workflows/build.yml)
 [![Windows CI](https://img.shields.io/badge/Windows%20CI-Passing-brightgreen.svg?style=for-the-badge&logo=windows)](.github/workflows/build-windows.yml)
-[![Releases](https://img.shields.io/badge/Release-v1.0.0-blueviolet.svg?style=for-the-badge&logo=github)](https://github.com/skrehanahamed/Apex_MidEnd_IVI/releases)
+[![Releases](https://img.shields.io/badge/Release-v1.1.0-blueviolet.svg?style=for-the-badge&logo=github)](https://github.com/skrehanahamed/Apex_MidEnd_IVI/releases)
 [![Developer](https://img.shields.io/badge/Developer-Sk%20Rehan%20Ahamed-FF6D00.svg?style=for-the-badge&logo=github)](https://github.com/skrehanahamed)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
 
@@ -325,12 +325,12 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
    set(APEX_IVI_VERSION_PATCH 0)
    ```
 2. **Backend Engine (`src/SystemController.hpp`)**:
-   - Injects compile definition `-DAPEX_IVI_VERSION_STRING="v1.0.0"`.
+   - Injects compile definition `-DAPEX_IVI_VERSION_STRING="v1.1.0"`.
    - Exposes `appVersion` property to QML via `systemController.appVersion`.
 3. **Automotive UI (`qml/components/screens/GeneralSettingsScreen.qml`)**:
    - Navigating to **Settings > Version info / Update** displays the live model code, software version, firmware version, and active **Apex Build / Release version**.
 4. **Git Tagging**:
-   - Tagging a commit (e.g. `git tag v1.0.0 && git push origin v1.0.0`) automatically launches all 3 platform builds in parallel.
+   - Tagging a commit (e.g. `git tag v1.1.0 && git push origin v1.1.0`) automatically launches all 3 platform builds in parallel.
 
 ---
 
@@ -394,7 +394,7 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
 
 ### 10. System Version & OTA Update Information
 ![System Version Info](docs/screenshots/10_system_version_info.png)
-*Automotive specification dashboard showing Model code, Software version, Firmware version, and the active Apex Release Version (`v1.0.0`).*
+*Automotive specification dashboard showing Model code, Software version, Firmware version, and the active Apex Release Version (`v1.1.0`).*
 
 </div>
 

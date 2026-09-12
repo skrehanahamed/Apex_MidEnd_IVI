@@ -728,7 +728,7 @@ private:
 #ifdef APEX_IVI_VERSION_STRING
     QString m_appVersion{APEX_IVI_VERSION_STRING};
 #else
-    QString m_appVersion{"v1.0.0"};
+    QString m_appVersion{"v1.1.0"};
 #endif
     QString m_systemModel{"AI3_PE_SUVP23S.DVAMN.S2IN"};
     QString m_softwareVersion{"AI3_PE_SUV.IND.D2V.001.001.230606"};
