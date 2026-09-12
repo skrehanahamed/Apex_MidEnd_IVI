@@ -1,0 +1,28 @@
+name: Update Release Notes
+
+on:
+  push:
+    paths:
+      - "scripts/generate_release_notes.py"
+      - ".github/workflows/update-release-notes.yml"
+
+jobs:
+  update-release-notes:
+    name: Update GitHub Release Notes
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Release Notes
+        run: |
+          python3 scripts/generate_release_notes.py "v1.1.0"
+
+      - name: Update GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v1.1.0" --title "Apex HORIZON MidEnd IVI - Digital Head Unit v1.1.0" --notes-file release_body.md

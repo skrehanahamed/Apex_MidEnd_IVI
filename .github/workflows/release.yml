@@ -228,3 +228,9 @@ jobs:
           files: release_assets/*.zip
           draft: false
           prerelease: false
+
+      - name: Force Update Release Metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ steps.version.outputs.VERSION }}" --title "Apex HORIZON MidEnd IVI - Digital Head Unit ${{ steps.version.outputs.VERSION }}" --notes-file release_body.md
