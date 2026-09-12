@@ -18,7 +18,7 @@
 
 <br/>
 
-<sub>Made with ❤️ by <b>Sk Rehan</b> and with the help of <b>Antigravity</b> and <b>ChatGPT</b></sub>
+<sub>Made by <b>Sk Rehan</b> with the help of <b>Antigravity</b> and <b>ChatGPT</b></sub>
 
 </div>
 
@@ -100,7 +100,7 @@ flowchart TB
     class NativeAudio,DisplayDriver,CANInterface hal;
 ```
 
-> 📄 *Source architecture specifications are also available in PlantUML format: [`docs/architecture/system_architecture.puml`](docs/architecture/system_architecture.puml)*
+> *Source architecture specifications are also available in PlantUML format: [`docs/architecture/system_architecture.puml`](docs/architecture/system_architecture.puml)*
 
 ---
 
@@ -127,7 +127,7 @@ flowchart TB
 - **Direct Navigation & Auto-Start**: Tapping the FM/AM icon from Home or Bottom Dock always opens the FM/AM screen, smoothly pausing active Bluetooth music to start the radio.
 - **Automotive Tuning Controls**:
   - `Seek Down (◀)` & `Seek Up (▶)` with tap-to-step and press-and-hold frequency rolling sweep.
-  - One-touch favorite star (`★`) button with persistent memory saving.
+  - One-touch favorite star button with persistent memory saving.
   - Dedicated Station List drawer and multi-select Delete Favorites modal.
 
 ### `SYS-04` Digital Rear View Monitor (DRVM) & Parking Guidance
@@ -294,7 +294,7 @@ make clean    # Clean all build artifacts and CMake caches
 
 ---
 
-## 🚀 Continuous Integration (GitHub Actions)
+## Continuous Integration (GitHub Actions)
 
 The repository provides automated CI workflows and multi-platform release packaging across **three major desktop and automotive target platforms**:
 
@@ -313,7 +313,7 @@ Workflows automatically trigger on:
 
 ---
 
-## 🏷️ Versioning & Release Management
+## Versioning & Release Management
 
 The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When a new version is assigned, it is centrally updated and propagated across all subsystems:
 
@@ -334,7 +334,7 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
 
 ---
 
-## 📸 Visual Showcase & Subsystem Tour
+## Visual Showcase & Subsystem Tour
 
 <div align="center">
 
@@ -405,7 +405,7 @@ The system adheres strictly to Semantic Versioning (`vMAJOR.MINOR.PATCH`). When 
 - **Lead Developer**: **Sk Rehan Ahamed** ([@skrehanahamed](https://github.com/skrehanahamed))
 - **Architecture**: Modern C++20, Qt 6.5+, QML, Native AVFoundation
 - **Design Architecture**: Modern 8-inch Display Audio (D-Audio) Cockpit Infotainment System
-- **Acknowledgments**: Made with ❤️ by **Sk Rehan** and with the help of **Antigravity** and **ChatGPT**.
+- **Acknowledgments**: Made by **Sk Rehan** with the help of **Antigravity** and **ChatGPT**.
 
 ---
 
