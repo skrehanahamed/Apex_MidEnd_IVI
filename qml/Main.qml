@@ -111,7 +111,7 @@ Window {
         anchors.right: parent.right
         height: 64
         z: 10
-        visible: (systemController.currentScreen !== "drvm")
+        visible: (systemController.currentScreen !== "drvm" && systemController.currentScreen !== "android_auto")
 
         onMenuClicked: {
             if (systemController.currentScreen === "home") {
@@ -174,6 +174,12 @@ Window {
         function onVolumeChanged() {
             mainWindow.showVolumeBar()
         }
+        function onAndroidAutoConnectedChanged() {
+            if (systemController.androidAutoConnected) {
+                console.log("[Apex IVI] Android Auto detected -> Automatically transitioning to Android Auto viewport")
+                systemController.navigateTo("android_auto")
+            }
+        }
     }
 
     function toggleReverseGear() {
@@ -229,6 +235,12 @@ Window {
             mainWindow.previousScreenBeforePhone = fromScreen
         } else if (systemController.currentScreen === "all_menus" || systemController.currentScreen === "home") {
             mainWindow.previousScreenBeforePhone = systemController.currentScreen
+        }
+
+        if (systemController.androidAutoConnected) {
+            console.log("[Main] Android Auto is connected -> Redirecting to Android Auto Caller")
+            systemController.openAndroidAutoPhone()
+            return
         }
 
         var isConnected = systemController.hasHandsFreeDevice
@@ -433,8 +445,12 @@ Window {
                 }
 
                 onProjectionClicked: {
-                    console.log("[Apex IVI] Projection clicked -> Showing Phone projection dialog")
-                    phoneProjectionDialog.visible = true
+                    console.log("[Apex IVI] Projection clicked from Home -> Connected:", systemController.androidAutoConnected)
+                    if (systemController.androidAutoConnected) {
+                        systemController.openAndroidAuto("menu")
+                    } else {
+                        phoneProjectionDialog.visible = true
+                    }
                 }
             }
 
@@ -465,8 +481,12 @@ Window {
                 }
 
                 onProjectionClicked: {
-                    console.log("[Apex IVI] Projection Clicked from Bottom Dock")
-                    phoneProjectionDialog.visible = true
+                    console.log("[Apex IVI] Projection Clicked from Bottom Dock -> Connected:", systemController.androidAutoConnected)
+                    if (systemController.androidAutoConnected) {
+                        systemController.navigateTo("android_auto")
+                    } else {
+                        phoneProjectionDialog.visible = true
+                    }
                 }
 
                 onRadioClicked: {
@@ -575,8 +595,12 @@ Window {
             }
 
             onProjectionClicked: {
-                console.log("[Apex IVI] Projection clicked from All Menus -> Showing Phone projection dialog")
-                phoneProjectionDialog.visible = true
+                console.log("[Apex IVI] Projection clicked from All Menus -> Connected:", systemController.androidAutoConnected)
+                if (systemController.androidAutoConnected) {
+                    systemController.openAndroidAuto("menu")
+                } else {
+                    phoneProjectionDialog.visible = true
+                }
             }
 
             onRadioClicked: {
@@ -1066,6 +1090,12 @@ Window {
                 mainWindow.previousScreenBeforeMedia = "media_select"
                 systemController.navigateTo("bluetooth_audio")
             }
+
+            onAndroidAutoSelected: {
+                console.log("[Apex IVI] Android Auto selected from Media Select -> Launching Android Auto Screen")
+                mainWindow.previousScreenBeforeMedia = "media_select"
+                systemController.navigateTo("android_auto")
+            }
         }
 
         // K. RADIO SCREEN (Matching Genuine IVI Photo 2 with live Indian FM audio streams)
@@ -1251,6 +1281,16 @@ Window {
             mainWindow.previousScreenBeforeDisplay = "drvm"
             systemController.navigateTo("display_settings")
         }
+    }
+
+    // ====================================================
+    // N. ANDROID AUTO SCREEN
+    // ====================================================
+    AndroidAutoScreen {
+        id: androidAutoScreen
+        anchors.fill: parent
+        z: 36
+        visible: (systemController.currentScreen === "android_auto")
     }
 
     // ====================================================
@@ -2189,7 +2229,11 @@ Window {
             onFinished: {
                 console.log("[Apex IVI] Splash completed -> Unloading splash screen completely")
                 splashLoader.sourceComponent = undefined
-                systemController.navigateTo("home")
+                if (systemController.androidAutoConnected) {
+                    systemController.navigateTo("android_auto")
+                } else {
+                    systemController.navigateTo("home")
+                }
             }
         }
     }

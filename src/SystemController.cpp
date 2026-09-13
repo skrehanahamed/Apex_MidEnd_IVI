@@ -32,6 +32,7 @@
 #include "NativeAudioRecorder.h"
 #include "BluezBluetoothManager.hpp"
 #include "PbapSyncManager.hpp"
+#include "AndroidAutoManager.hpp"
 #include <QRegularExpression>
 #include <cmath>
 
@@ -142,15 +143,14 @@ void RadioStreamWorker::stop()
 {
     if (m_process) {
         if (m_process->state() != QProcess::NotRunning) {
-            m_process->terminate();
-            if (!m_process->waitForFinished(300)) {
-                m_process->kill();
-                m_process->waitForFinished(300);
-            }
+            m_process->kill();
+            m_process->waitForFinished(100);
         }
         delete m_process;
         m_process = nullptr;
     }
+    // Instantly terminate any lingering gst-play-1.0 audio processes with zero delay
+    QProcess::execute("killall", QStringList() << "-9" << "gst-play-1.0");
     emit playbackStateChanged(false);
     emit mediaStatusChanged(false);
 }
@@ -394,6 +394,10 @@ SystemController::SystemController(QObject *parent)
         [this](const QString &mac) {
             qDebug() << "[Apex IVI] Bluetooth device connected via D-Bus:" << mac;
             refreshBluetoothDevices();
+            if (m_bluezManager && m_bluezManager->isInputDevice(mac)) {
+                qDebug() << "[Apex IVI] Connected device is an input device (mouse/keyboard); skipping telephony/audio link policy commands.";
+                return;
+            }
             // Disable SNIFF and power save on the Bluetooth link to eliminate packet delays and audio stutter.
             QProcess::startDetached("hciconfig", QStringList() << "hci0" << "lp" << "NONE");
             QProcess::startDetached("hcitool", QStringList() << "lp" << mac << "NONE");
@@ -438,6 +442,8 @@ SystemController::SystemController(QObject *parent)
             }
             emit deviceDisconnected(mac, devName);
             m_cachedPlayerPath.clear();
+            m_bluetoothPlayerName.clear();
+            emit bluetoothPlayerNameChanged();
             refreshBluetoothDevices();
             updatePrimaryPhoneTelemetry(false);
         });
@@ -511,6 +517,45 @@ SystemController::SystemController(QObject *parent)
     connect(m_bluezManager, &BluezBluetoothManager::discoveredDevicesChanged, this, &SystemController::discoveredDeviceListChanged);
     connect(m_bluezManager, &BluezBluetoothManager::discoveryStateChanged, this, &SystemController::discoveryStateChanged);
 
+    // Initialize Wired Android Auto Manager
+    m_androidAutoManager = new AndroidAutoManager(this);
+    if (m_bluezManager) {
+        m_androidAutoManager->setBluetoothAddress(m_bluezManager->adapterAddress());
+        connect(m_bluezManager, &BluezBluetoothManager::adapterChanged, this, [this]() {
+            if (m_androidAutoManager && m_bluezManager) {
+                m_androidAutoManager->setBluetoothAddress(m_bluezManager->adapterAddress());
+            }
+        });
+    }
+    connect(m_androidAutoManager, &AndroidAutoManager::phoneAttachedChanged, this, [this](bool attached) {
+        emit androidAutoAttachedChanged();
+    });
+    connect(m_androidAutoManager, &AndroidAutoManager::accessoryConnectedChanged, this, [this](bool connected) {
+        emit androidAutoConnectedChanged();
+        qDebug() << "[Apex IVI] Android Auto accessory connected state:" << connected;
+        if (!connected) {
+            if (m_currentScreen == "android_auto") {
+                qDebug() << "[Apex IVI] Android Auto disconnected -> Returning to home screen";
+                setCurrentScreen("home");
+            }
+        }
+    });
+    connect(m_androidAutoManager, &AndroidAutoManager::deviceNameChanged, this, &SystemController::androidAutoDeviceNameChanged);
+    connect(m_androidAutoManager, &AndroidAutoManager::statusMessageChanged, this, &SystemController::androidAutoStatusChanged);
+    connect(m_androidAutoManager, &AndroidAutoManager::aoaVersionChanged, this, &SystemController::androidAutoAoaVersionChanged);
+    connect(m_androidAutoManager, &AndroidAutoManager::frameReady, this, &SystemController::androidAutoFrameReady);
+    connect(m_androidAutoManager, &AndroidAutoManager::exitRequested, this, [this]() {
+        qInfo() << "[Apex IVI] Return to APEX tapped in Android Auto drawer -> Navigating to Home";
+        navigateTo("home");
+    });
+    connect(m_androidAutoManager, &AndroidAutoManager::audioFocusGained, this, [this]() {
+        qInfo() << "[Apex IVI Audio Priority] Android Auto acquired audio focus -> Pausing native Radio and Bluetooth music";
+        pauseRadio();
+        bluetoothMediaPause();
+        m_selectedMediaSource = "android_auto";
+        emit selectedMediaSourceChanged();
+    });
+
     // Start Dedicated Worker Thread for Live Radio Streaming to guarantee 60 FPS GUI
     m_radioThread = new QThread(this);
     m_radioWorker = new RadioStreamWorker(); // No parent so it can be moved to thread
@@ -546,9 +591,7 @@ SystemController::SystemController(QObject *parent)
     connect(m_radioTuneTimer, &QTimer::timeout, this, &SystemController::startRadioStream);
 
     // Bluetooth Media Progress & Polling Timers
-    if (QFile::exists("/tmp/apex_bt_album_art.jpg")) {
-        m_bluetoothAlbumArtUrl = "file:///tmp/apex_bt_album_art.jpg";
-    }
+    m_bluetoothAlbumArtUrl = "";
 
     m_bluetoothMediaProgressTimer = new QTimer(this);
     m_bluetoothMediaProgressTimer->setInterval(1000);
@@ -808,6 +851,7 @@ void SystemController::updateDateTime()
 void SystemController::setCurrentScreen(const QString &screen)
 {
     if (m_currentScreen != screen) {
+        QString prevScreen = m_currentScreen;
         m_currentScreen = screen;
         emit screenChanged();
         qDebug() << "[Apex IVI] Screen changed to:" << screen;
@@ -823,11 +867,22 @@ void SystemController::setCurrentScreen(const QString &screen)
                 m_bluetoothAutoPlayInhibited = false;
             }
         }
+        if (m_androidAutoManager) {
+            if (screen == "android_auto") {
+                m_androidAutoManager->requestVideoFocus(true);
+            } else if (prevScreen == "android_auto") {
+                m_androidAutoManager->requestVideoFocus(false);
+            }
+        }
     }
 }
 
 void SystemController::navigateTo(const QString &screen)
 {
+    if (screen == "phone" && androidAutoConnected()) {
+        openAndroidAutoPhone();
+        return;
+    }
     setCurrentScreen(screen);
 }
 
@@ -883,9 +938,13 @@ void SystemController::startRadioStream()
     QString urlStr = cur["streamUrl"].toString();
 
     if (!urlStr.isEmpty() && m_radioWorker) {
-        // PRIORITY RULE: Exclusive media playback - pause Bluetooth music
-        qDebug() << "[Apex IVI Audio Priority] Starting FM/AM Radio -> Ensuring Bluetooth Music is paused";
+        // PRIORITY RULE: Exclusive media playback - pause Bluetooth and Android Auto music
+        qDebug() << "[Apex IVI Audio Priority] Starting FM/AM Radio -> Ensuring other media is paused";
         bluetoothMediaPause();
+        if (m_androidAutoManager && m_androidAutoManager->isAccessoryConnected()) {
+            qInfo() << "[Apex IVI Audio Priority] Starting Radio -> Pausing Android Auto audio (KEYCODE_MEDIA_PAUSE 127)";
+            sendAndroidAutoKey(127);
+        }
         m_selectedMediaSource = m_radioBand.toLower();
         emit selectedMediaSourceChanged();
 
@@ -1302,6 +1361,26 @@ void SystemController::selectMediaSource(const QString &source)
 {
     qDebug() << "[Apex IVI Media] Selected media source:" << source;
     setSelectedMediaSource(source);
+
+    if (source == "android_auto") {
+        if (m_radioPlaying) {
+            stopRadio();
+        }
+        bluetoothMediaPause();
+        if (m_androidAutoManager && m_androidAutoManager->isAccessoryConnected()) {
+            qInfo() << "[Apex IVI Audio Priority] Android Auto selected -> Sending KEYCODE_MEDIA_PLAY (126)";
+            sendAndroidAutoKey(126);
+        }
+        openAndroidAuto("menu");
+        return;
+    }
+
+    // Native media source selected (FM, AM, USB, Bluetooth) -> Pause Android Auto
+    if (m_androidAutoManager && m_androidAutoManager->isAccessoryConnected()) {
+        qInfo() << "[Apex IVI Audio Priority] Native media selected (" << source << ") -> Pausing Android Auto (KEYCODE_MEDIA_PAUSE 127)";
+        sendAndroidAutoKey(127);
+    }
+
     if (source == "fm") {
         qDebug() << "[Apex IVI Audio Priority] FM selected -> Ensuring Bluetooth Music is paused";
         bluetoothMediaPause();
@@ -1343,9 +1422,10 @@ void SystemController::selectMediaSource(const QString &source)
 
 void SystemController::triggerProjection()
 {
-    m_phoneConnected = !m_phoneConnected;
-    emit phoneConnectionChanged();
-    qDebug() << "[Apex IVI] Projection toggle clicked. State:" << m_phoneConnected;
+    qDebug() << "[Apex IVI] triggerProjection called. Connected:" << androidAutoConnected();
+    if (!androidAutoConnected()) {
+        triggerAndroidAutoHandshake();
+    }
 }
 
 void SystemController::setBluetoothConnected(bool connected)
@@ -3182,7 +3262,6 @@ void SystemController::parseCallStateOutput(const QString &output)
 
 QString SystemController::resolveBluetoothPlayerPath() const
 {
-    if (!m_cachedPlayerPath.isEmpty()) return m_cachedPlayerPath;
     QString mac = primaryConnectedPhoneMac().toUpper();
     if (mac.isEmpty()) {
         for (const auto &item : m_bluetoothDeviceList) {
@@ -3195,7 +3274,53 @@ QString SystemController::resolveBluetoothPlayerPath() const
     }
     if (mac.isEmpty()) return QString();
     mac.replace(':', '_');
-    return QString("/org/bluez/hci0/dev_%1/player0").arg(mac);
+    const QString devPath = QString("/org/bluez/hci0/dev_%1").arg(mac);
+
+    // Dynamic resolution via BlueZ MediaControl1:
+    // When Android switches between music apps (Mi Music, YouTube Music, Spotify, etc.),
+    // BlueZ creates a new player object (player0, player1, player5, etc.).
+    // MediaControl1.Player on the device path always points to the currently active player!
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        "org.bluez", devPath, "org.freedesktop.DBus.Properties", "Get");
+    msg << "org.bluez.MediaControl1" << "Player";
+    QDBusMessage reply = QDBusConnection::systemBus().call(msg, QDBus::BlockWithGui, 300);
+    if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
+        QDBusVariant var = qvariant_cast<QDBusVariant>(reply.arguments().first());
+        QDBusObjectPath p = qvariant_cast<QDBusObjectPath>(var.variant());
+        if (!p.path().isEmpty()) {
+            m_cachedPlayerPath = p.path();
+            return m_cachedPlayerPath;
+        }
+    }
+
+    // Fallback: Introspect devPath to find active player nodes (e.g. player0, player1, player5)
+    // and pick the highest index node which represents the latest player instance registered by BlueZ.
+    QDBusMessage introMsg = QDBusMessage::createMethodCall(
+        "org.bluez", devPath, "org.freedesktop.DBus.Introspectable", "Introspect");
+    QDBusMessage introReply = QDBusConnection::systemBus().call(introMsg, QDBus::BlockWithGui, 300);
+    if (introReply.type() == QDBusMessage::ReplyMessage && !introReply.arguments().isEmpty()) {
+        QString xml = introReply.arguments().first().toString();
+        QRegularExpression re("<node name=\"(player(\\d+))\"");
+        QRegularExpressionMatchIterator i = re.globalMatch(xml);
+        QString bestPlayer;
+        int maxIndex = -1;
+        while (i.hasNext()) {
+            QRegularExpressionMatch match = i.next();
+            QString nodeName = match.captured(1);
+            int idx = match.captured(2).toInt();
+            if (idx > maxIndex) {
+                maxIndex = idx;
+                bestPlayer = QString("%1/%2").arg(devPath, nodeName);
+            }
+        }
+        if (!bestPlayer.isEmpty()) {
+            m_cachedPlayerPath = bestPlayer;
+            return m_cachedPlayerPath;
+        }
+    }
+
+    if (!m_cachedPlayerPath.isEmpty()) return m_cachedPlayerPath;
+    return QString("%1/player0").arg(devPath);
 }
 
 void SystemController::setBluetoothMediaPlayback(bool play)
@@ -3309,29 +3434,39 @@ void SystemController::bluetoothMediaPrevious()
 
 void SystemController::toggleBluetoothRepeat()
 {
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
     if (m_bluetoothRepeatMode == "off") m_bluetoothRepeatMode = "alltracks";
     else if (m_bluetoothRepeatMode == "alltracks") m_bluetoothRepeatMode = "singletrack";
     else m_bluetoothRepeatMode = "off";
     emit bluetoothRepeatModeChanged();
+    qDebug() << "[Apex IVI] Bluetooth Repeat toggled ->" << m_bluetoothRepeatMode;
 
     const QString playerPath = resolveBluetoothPlayerPath();
     if (!playerPath.isEmpty()) {
         QDBusMessage msg = QDBusMessage::createMethodCall("org.bluez", playerPath, "org.freedesktop.DBus.Properties", "Set");
         msg << "org.bluez.MediaPlayer1" << "Repeat" << QVariant::fromValue(QDBusVariant(m_bluetoothRepeatMode));
-        QDBusConnection::systemBus().send(msg);
+        auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this, [watcher](QDBusPendingCallWatcher *w) {
+            w->deleteLater();
+        });
     }
 }
 
 void SystemController::toggleBluetoothShuffle()
 {
+    m_lastMediaCommandMs = QDateTime::currentMSecsSinceEpoch();
     m_bluetoothShuffleMode = !m_bluetoothShuffleMode;
     emit bluetoothShuffleModeChanged();
+    qDebug() << "[Apex IVI] Bluetooth Shuffle toggled ->" << m_bluetoothShuffleMode;
 
     const QString playerPath = resolveBluetoothPlayerPath();
     if (!playerPath.isEmpty()) {
         QDBusMessage msg = QDBusMessage::createMethodCall("org.bluez", playerPath, "org.freedesktop.DBus.Properties", "Set");
         msg << "org.bluez.MediaPlayer1" << "Shuffle" << QVariant::fromValue(QDBusVariant(QString(m_bluetoothShuffleMode ? "alltracks" : "off")));
-        QDBusConnection::systemBus().send(msg);
+        auto *watcher = new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(msg), this);
+        connect(watcher, &QDBusPendingCallWatcher::finished, this, [watcher](QDBusPendingCallWatcher *w) {
+            w->deleteLater();
+        });
     }
 }
 
@@ -3349,28 +3484,41 @@ void SystemController::fetchAlbumArt(const QString &title, const QString &artist
 void SystemController::updateBluetoothAlbumArt(const QString &title, const QString &artist)
 {
     QString query = (title + " " + artist).trimmed();
-    if (query.isEmpty() || query == "No Media Playing" || query == "Loading...") return;
+    if (query.isEmpty() || query == "No Media Playing" || query == "Loading..." ||
+        query.contains("<Unknown Title>", Qt::CaseInsensitive) || query.contains("Unknown Title", Qt::CaseInsensitive)) {
+        m_bluetoothAlbumArtUrl = "";
+        emit bluetoothAlbumArtUrlChanged();
+        return;
+    }
 
     m_albumArtFlip = 1 - m_albumArtFlip;
     const QString targetFile = QString("/tmp/apex_bt_album_art_%1.jpg").arg(m_albumArtFlip);
+    QFile::remove(targetFile);
 
     QProcess *artProc = new QProcess(this);
     connect(artProc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
         [this, artProc, targetFile](int exitCode, QProcess::ExitStatus) {
             artProc->deleteLater();
-            if (exitCode == 0 && QFile::exists(targetFile)) {
+            if (exitCode == 0 && QFile::exists(targetFile) && QFileInfo(targetFile).size() > 500) {
                 m_bluetoothAlbumArtUrl = QString("file://%1").arg(targetFile);
                 emit bluetoothAlbumArtUrlChanged();
                 qDebug() << "[Apex IVI] Live album art updated:" << m_bluetoothAlbumArtUrl;
+            } else {
+                m_bluetoothAlbumArtUrl = "";
+                emit bluetoothAlbumArtUrlChanged();
+                qDebug() << "[Apex IVI] No album art found -> using normal background image";
             }
         });
     if (QFile::exists("/usr/bin/apex-fetch-artwork.py")) {
         artProc->start("/usr/bin/apex-fetch-artwork.py", QStringList() << query << targetFile);
     } else {
         artProc->start("python3", QStringList() << "-c"
-            << QString("import sys, json, urllib.request, urllib.parse, shutil\n"
+            << QString("import sys, json, urllib.request, urllib.parse, shutil, os\n"
                "q = urllib.parse.quote(sys.argv[1])\n"
                "target = sys.argv[2]\n"
+               "if os.path.exists(target):\n"
+               "    try: os.remove(target)\n"
+               "    except Exception: pass\n"
                "url = f'https://itunes.apple.com/search?term={q}&entity=song&limit=1'\n"
                "req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})\n"
                "try:\n"
@@ -3379,10 +3527,11 @@ void SystemController::updateBluetoothAlbumArt(const QString &title, const QStri
                "        if d.get('resultCount', 0) > 0:\n"
                "            art = d['results'][0]['artworkUrl100'].replace('100x100bb', '600x600bb')\n"
                "            urllib.request.urlretrieve(art, target)\n"
-               "            try: shutil.copyfile(target, '/tmp/apex_bt_album_art.jpg')\n"
-               "            except Exception: pass\n"
+               "            if os.path.exists(target) and os.path.getsize(target) > 500:\n"
+               "                sys.exit(0)\n"
                "except Exception:\n"
-               "    pass\n")
+               "    pass\n"
+               "sys.exit(1)\n")
             << query << targetFile);
     }
 }
@@ -3431,14 +3580,8 @@ void SystemController::pollBluetoothMediaPlayer()
 
             QDBusPendingReply<QVariantMap> reply = *watcher;
             if (reply.isError()) {
-                // BlueZ may not have registered the player object yet, or path is alternate.
-                if (playerPath.endsWith("/player0")) {
-                    QString alt = playerPath;
-                    alt.replace("/player0", "/player1");
-                    m_cachedPlayerPath = alt;
-                } else {
-                    m_cachedPlayerPath.clear();
-                }
+                // Active player may have changed (e.g. user switched music apps on phone)
+                m_cachedPlayerPath.clear();
                 return;
             }
 
@@ -3452,6 +3595,16 @@ void SystemController::pollBluetoothMediaPlayer()
                 return v;
             };
 
+            // Read Player Name (e.g. "YouTube Music", "Mi Music", "Spotify")
+            if (props.contains("Name")) {
+                QString pName = dbusUnwrap(props.value("Name")).toString().trimmed();
+                if (!pName.isEmpty() && pName != m_bluetoothPlayerName) {
+                    m_bluetoothPlayerName = pName;
+                    emit bluetoothPlayerNameChanged();
+                    qDebug() << "[Apex IVI] Active Bluetooth Media Player:" << m_bluetoothPlayerName;
+                }
+            }
+
             // --- Status ---
             // IMPORTANT: Do NOT overwrite the status for 3 seconds after any
             // Play/Pause/Next/Previous command.  AVRCP can take 200–800 ms to
@@ -3463,6 +3616,10 @@ void SystemController::pollBluetoothMediaPlayer()
 
             if (props.contains("Status") && !commandProtectionActive) {
                 QString st = dbusUnwrap(props.value("Status")).toString();
+                // BlueZ returns "error" momentarily during app switches / initial loading
+                if (st == "error") {
+                    st = "paused";
+                }
                 if (st == "playing" && m_bluetoothAutoPlayInhibited && m_currentScreen != "bluetooth_audio") {
                     qDebug() << "[Apex IVI] Boot auto-play inhibited (screen:" << m_currentScreen << ") -> Pausing";
                     setBluetoothMediaPlayback(false);
@@ -3509,15 +3666,29 @@ void SystemController::pollBluetoothMediaPlayer()
 
 
             // Title
-            QString t = getString("Title");
+            QString t = getString("Title").trimmed();
+            if (t.compare("<Unknown Title>", Qt::CaseInsensitive) == 0 ||
+                t.compare("Unknown Title", Qt::CaseInsensitive) == 0 ||
+                t.compare("Unknown", Qt::CaseInsensitive) == 0) {
+                t.clear();
+            }
             if (t != m_bluetoothTrackTitle) { m_bluetoothTrackTitle = t; trackChanged = true; }
 
             // Artist
-            QString a = getString("Artist");
+            QString a = getString("Artist").trimmed();
+            if (a.compare("<Unknown Artist>", Qt::CaseInsensitive) == 0 ||
+                a.compare("Unknown Artist", Qt::CaseInsensitive) == 0 ||
+                a.compare("Unknown", Qt::CaseInsensitive) == 0) {
+                a.clear();
+            }
             if (a != m_bluetoothTrackArtist) { m_bluetoothTrackArtist = a; trackChanged = true; }
 
             // Album
-            QString al = getString("Album");
+            QString al = getString("Album").trimmed();
+            if (al.compare("<Unknown Album>", Qt::CaseInsensitive) == 0 ||
+                al.compare("Unknown Album", Qt::CaseInsensitive) == 0) {
+                al.clear();
+            }
             if (al != m_bluetoothTrackAlbum) { m_bluetoothTrackAlbum = al; trackChanged = true; }
 
             // Duration (in milliseconds per BlueZ spec)
@@ -3536,12 +3707,31 @@ void SystemController::pollBluetoothMediaPlayer()
                 }
             }
 
+            if (props.contains("Repeat")) {
+                QString rep = dbusUnwrap(props.value("Repeat")).toString();
+                if (!rep.isEmpty() && rep != "off" && rep != m_bluetoothRepeatMode) {
+                    m_bluetoothRepeatMode = rep;
+                    emit bluetoothRepeatModeChanged();
+                }
+            }
+
+            if (props.contains("Shuffle")) {
+                QString shuf = dbusUnwrap(props.value("Shuffle")).toString();
+                bool isShuf = (!shuf.isEmpty() && shuf != "off");
+                if (isShuf && !m_bluetoothShuffleMode) {
+                    m_bluetoothShuffleMode = true;
+                    emit bluetoothShuffleModeChanged();
+                }
+            }
+
             if (trackChanged) {
                 qDebug() << "[Apex IVI] BT Track Changed -> Title:" << m_bluetoothTrackTitle
                          << "Artist:" << m_bluetoothTrackArtist
                          << "Status:" << m_bluetoothPlaybackStatus;
                 emit bluetoothTrackChanged();
                 cycleRandomScenicBackground();
+                m_bluetoothAlbumArtUrl = "";
+                emit bluetoothAlbumArtUrlChanged();
                 if (!m_bluetoothTrackTitle.isEmpty()) {
                     updateBluetoothAlbumArt(m_bluetoothTrackTitle, m_bluetoothTrackArtist);
                 }
@@ -4023,6 +4213,14 @@ void SystemController::reportActivity()
 
 void SystemController::onInactivityTimeout()
 {
+    // Do NOT activate screensaver if Android Auto is the active screen or projecting
+    if (m_currentScreen == "android_auto" || (m_androidAutoManager && m_androidAutoManager->property("connected").toBool())) {
+        if (m_inactivityTimer) {
+            m_inactivityTimer->start(180000);
+        }
+        return;
+    }
+
     if (m_currentScreen != "loading" && !m_displayOff) {
         qDebug() << "[Apex IVI] User inactivity reached -> activating screensaver";
         setDisplayOff(true);
@@ -4611,4 +4809,109 @@ void SystemController::increaseVolume()
 void SystemController::decreaseVolume()
 {
     setVolume(m_volume - 1);
+}
+
+bool SystemController::androidAutoAttached() const
+{
+    return m_androidAutoManager ? m_androidAutoManager->isPhoneAttached() : false;
+}
+
+bool SystemController::androidAutoConnected() const
+{
+    return m_androidAutoManager ? m_androidAutoManager->isAccessoryConnected() : false;
+}
+
+QString SystemController::androidAutoDeviceName() const
+{
+    return m_androidAutoManager ? m_androidAutoManager->deviceName() : QString();
+}
+
+QString SystemController::androidAutoStatus() const
+{
+    return m_androidAutoManager ? m_androidAutoManager->statusMessage() : QString("Waiting for USB connection...");
+}
+
+int SystemController::androidAutoAoaVersion() const
+{
+    return m_androidAutoManager ? m_androidAutoManager->aoaVersion() : 0;
+}
+
+void SystemController::triggerAndroidAutoHandshake()
+{
+    if (m_androidAutoManager) {
+        m_androidAutoManager->triggerHandshake();
+    }
+}
+
+void SystemController::startAndroidAuto()
+{
+    triggerAndroidAutoHandshake();
+    navigateTo("android_auto");
+}
+
+void SystemController::sendAndroidAutoTouch(int action, int x, int y)
+{
+    reportActivity();
+    if (action != 2) {
+        qInfo() << "[SystemController] sendAndroidAutoTouch action=" << action
+                << (action == 0 ? "(PRESS)" : (action == 1 ? "(RELEASE)" : "(DRAG)"))
+                << "x=" << x << "y=" << y;
+    }
+    if (m_androidAutoManager) {
+        m_androidAutoManager->sendTouch(action, x, y);
+    }
+}
+
+void SystemController::sendAndroidAutoKey(int keyCode)
+{
+    if (m_androidAutoManager) {
+        m_androidAutoManager->sendKey(static_cast<uint32_t>(keyCode));
+    }
+}
+
+void SystemController::openAndroidAutoPhone()
+{
+    setCurrentScreen("android_auto");
+    if (m_androidAutoManager) {
+        // Allow video focus indication to reach phone before sending key
+        QTimer::singleShot(200, this, [this]() {
+            qInfo() << "[SystemController] openAndroidAutoPhone: dispatching PHONE key (5)";
+            sendAndroidAutoKey(5);
+        });
+    }
+}
+
+void SystemController::openAndroidAuto(const QString &mode)
+{
+    setAndroidAutoTargetMode(mode);
+    if (!androidAutoConnected()) {
+        triggerAndroidAutoHandshake();
+    }
+    setCurrentScreen("android_auto");
+
+    if (m_androidAutoManager) {
+        QTimer::singleShot(250, this, [this, mode]() {
+            if (mode == "map") {
+                qInfo() << "[SystemController] openAndroidAuto(map): navigating to Full Map view by tapping Map rail icon (1238, 271)";
+                sendAndroidAutoKey(65538);
+                // Tapping the first map icon on the rail (x=1238, y=271) expands to full map view
+                QTimer::singleShot(200, this, [this]() {
+                    sendAndroidAutoTouch(0, 1238, 271);
+                    QTimer::singleShot(50, this, [this]() {
+                        sendAndroidAutoTouch(1, 1238, 271);
+                    });
+                });
+            } else {
+                qInfo() << "[SystemController] openAndroidAuto(" << mode << "): navigating to Dashboard / Split view (1238, 680)";
+                sendAndroidAutoKey(3);
+                // Tapping the bottom-right dashboard button (x=1238, y=680) toggles back to split dashboard
+                QTimer::singleShot(200, this, [this]() {
+                    sendAndroidAutoTouch(0, 1238, 680);
+                    QTimer::singleShot(50, this, [this]() {
+                        sendAndroidAutoTouch(1, 1238, 680);
+                    });
+                });
+            }
+        });
+    }
 }

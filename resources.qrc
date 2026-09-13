@@ -44,6 +44,14 @@ Developer: Sk Rehan Ahamed
         <file>assets/bluetooth/icon_bt_audio.png</file>
         <file>assets/bluetooth/icon_bt_headset.png</file>
         <file>assets/bluetooth/icon_bt_music.png</file>
+        <file>assets/bluetooth/icon_bt_shuffle.png</file>
+        <file>assets/bluetooth/icon_bt_repeat.png</file>
+        <file>assets/bluetooth/icon_bt_repeat_one.png</file>
+        <file>assets/bluetooth/icon_bt_shuffle_inactive.png</file>
+        <file>assets/bluetooth/icon_bt_shuffle_active.png</file>
+        <file>assets/bluetooth/icon_bt_repeat_inactive.png</file>
+        <file>assets/bluetooth/icon_bt_repeat_active.png</file>
+        <file>assets/bluetooth/icon_bt_repeat_one_active.png</file>
         <file>assets/bluetooth/icon_device_conn.png</file>
         <file>assets/bluetooth/bt_guide_5phones.png</file>
         <file>assets/bluetooth/bt_guide_step1.png</file>
@@ -86,10 +94,20 @@ Developer: Sk Rehan Ahamed
         <file>assets/ui/icon_display.png</file>
         <file>assets/ui/icon_widget_radiomedia.png</file>
         <file>assets/ui/phone_projection.png</file>
+        <file>assets/ui/icon_projection_map.png</file>
+        <file>assets/ui/icon_aa_white.png</file>
         <file>assets/ui/qr_manual.png</file>
         <file>assets/ui/icon_quiet_mode.png</file>
         <file>assets/ui/icon_all_menus_hdr.png</file>
         <file>assets/ui/icon_volume_speaker.png</file>
+
+        <!-- Android Auto Coolwalk Assets -->
+        <file>assets/auto/icon_assistant_dots.png</file>
+        <file>assets/auto/icon_9dots.png</file>
+        <file>assets/auto/icon_gmaps.png</file>
+        <file>assets/auto/icon_spotify.png</file>
+        <file>assets/auto/icon_ytmusic.png</file>
+        <file>assets/auto/icon_car_exit.png</file>
 
         <!-- Media Icons -->
         <file>assets/media/icon_media_fm.png</file>
@@ -152,6 +170,7 @@ Developer: Sk Rehan Ahamed
         <file>qml/components/screens/VoiceMemoScreen.qml</file>
         <file>qml/components/screens/DrvmScreen.qml</file>
         <file>qml/components/screens/ApexLoadingScreen.qml</file>
+        <file>qml/components/screens/AndroidAutoScreen.qml</file>
 
         <!-- QML Navigation & Chrome -->
         <file>qml/components/navigation/TopStatusBar.qml</file>

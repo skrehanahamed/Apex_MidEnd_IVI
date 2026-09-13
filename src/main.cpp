@@ -15,9 +15,13 @@
 #include <QIcon>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QQuickWindow>
+#include <QTimer>
+#include <QFile>
 #include <cstdio>
 #include <cstdlib>
 #include "SystemController.hpp"
+#include "AndroidAutoVideoItem.hpp"
 
 static void apexMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
@@ -105,12 +109,33 @@ private:
     SystemController *m_controller{nullptr};
 };
 
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
+
+static void crashHandler(int sig) {
+    void *array[30];
+    size_t size = backtrace(array, 30);
+    fprintf(stderr, "\n\n*** CRASH SIGNAL %d CAUGHT ***\n", sig);
+    backtrace_symbols_fd(array, size, STDERR_FILENO);
+    fflush(stderr);
+    _exit(1);
+}
+
 int main(int argc, char *argv[])
 {
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
+    fprintf(stdout, "[MAIN] Step 1: Starting Apex IVI\n");
+    fflush(stdout);
+
     qInstallMessageHandler(apexMessageHandler);
 
     // High DPI scaling is enabled by default in Qt 6
     QGuiApplication app(argc, argv);
+    fprintf(stdout, "[MAIN] Step 2: QGuiApplication created\n");
+    fflush(stdout);
+
     app.setApplicationName("Apex IVI");
     app.setOrganizationName("Apex");
 
@@ -122,6 +147,8 @@ int main(int argc, char *argv[])
     QFont defaultFont("Roboto", 14);
     defaultFont.setStyleHint(QFont::SansSerif);
     app.setFont(defaultFont);
+    fprintf(stdout, "[MAIN] Step 3: Fonts loaded\n");
+    fflush(stdout);
 
     QIcon appIcon(":/assets/branding/apex_logo.png");
     if (appIcon.isNull()) {
@@ -132,21 +159,76 @@ int main(int argc, char *argv[])
 
     QQuickStyle::setStyle("Basic");
 
+    fprintf(stdout, "[MAIN] Step 4: Creating SystemController\n");
+    fflush(stdout);
     SystemController systemController;
+    fprintf(stdout, "[MAIN] Step 5: SystemController created successfully\n");
+    fflush(stdout);
+
     GlobalActivityFilter activityFilter(&systemController, &app);
     app.installEventFilter(&activityFilter);
 
+    qmlRegisterType<AndroidAutoVideoItem>("com.apex.ivi", 1, 0, "AndroidAutoVideoItem");
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("systemController", &systemController);
+    fprintf(stdout, "[MAIN] Step 6: Loading QML\n");
+    fflush(stdout);
 
     const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
     QObject::connect(
         &engine,
         &QQmlApplicationEngine::objectCreated,
         &app,
-        [url](QObject *obj, const QUrl &objUrl) {
+        [url, &systemController](QObject *obj, const QUrl &objUrl) {
             if (!obj && url == objUrl)
                 QCoreApplication::exit(-1);
+
+            QQuickWindow *win = qobject_cast<QQuickWindow*>(obj);
+            if (win) {
+                QTimer *snapTimer = new QTimer(win);
+                snapTimer->setInterval(500);
+                QObject::connect(snapTimer, &QTimer::timeout, win, [win, &systemController]() {
+                    if (QFile::exists("/tmp/navigate_to")) {
+                        QFile f("/tmp/navigate_to");
+                        if (f.open(QIODevice::ReadOnly)) {
+                            QString target = QString::fromUtf8(f.readAll()).trimmed();
+                            f.close();
+                            QFile::remove("/tmp/navigate_to");
+                            systemController.openAndroidAuto(target);
+                        }
+                    }
+                    if (QFile::exists("/tmp/aa_cmd")) {
+                        QFile f("/tmp/aa_cmd");
+                        if (f.open(QIODevice::ReadOnly)) {
+                            QString cmd = QString::fromUtf8(f.readAll()).trimmed();
+                            f.close();
+                            QFile::remove("/tmp/aa_cmd");
+                            QStringList parts = cmd.split(" ");
+                            if (parts[0] == "key" && parts.size() > 1) {
+                                qInfo() << "[Apex IVI IPC] Sending AA Key:" << parts[1].toInt();
+                                systemController.sendAndroidAutoKey(parts[1].toInt());
+                            } else if (parts[0] == "tap" && parts.size() > 2) {
+                                int tx = parts[1].toInt();
+                                int ty = parts[2].toInt();
+                                qInfo() << "[Apex IVI IPC] Sending AA Tap at (" << tx << "," << ty << ")";
+                                systemController.sendAndroidAutoTouch(0, tx, ty);
+                                QTimer::singleShot(60, &systemController, [&systemController, tx, ty]() {
+                                    systemController.sendAndroidAutoTouch(1, tx, ty);
+                                });
+                            }
+                        }
+                    }
+                    if (QFile::exists("/tmp/take_screenshot")) {
+                        QFile::remove("/tmp/take_screenshot");
+                        QImage img = win->grabWindow();
+                        img.save("/tmp/apex_screenshot.png");
+                        qInfo() << "[Apex IVI] Screenshot captured to /tmp/apex_screenshot.png ("
+                                << img.width() << "x" << img.height() << ")";
+                    }
+                });
+                snapTimer->start();
+            }
         },
         Qt::QueuedConnection
     );

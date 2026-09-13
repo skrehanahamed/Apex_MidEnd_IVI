@@ -294,8 +294,8 @@ Rectangle {
                         columnSpacing: 48
 
                         MenuAppCard {
-                            title: "Phone"
-                            iconSrc: "qrc:/assets/apps/icon_all_phone.png"
+                            title: systemController.androidAutoConnected ? "Android Auto Phone" : "Phone"
+                            iconSrc: systemController.androidAutoConnected ? "qrc:/assets/phone/icon_phone_green.png" : "qrc:/assets/apps/icon_all_phone.png"
                             onClicked: {
                                 console.log("[AllMenus] Phone clicked")
                                 root.phoneClicked()
@@ -390,24 +390,6 @@ Rectangle {
                             onClicked: {
                                 console.log("[AllMenus] Manual clicked -> Opening Manual screen")
                                 root.manualClicked()
-                            }
-                        }
-
-                        MenuAppCard {
-                            title: "Android Auto"
-                            iconSrc: "qrc:/assets/media/icon_media_androidauto.png"
-                            onClicked: {
-                                console.log("[AllMenus] Android Auto clicked")
-                                systemController.triggerProjection()
-                            }
-                        }
-
-                        MenuAppCard {
-                            title: "Apple CarPlay"
-                            iconSrc: "qrc:/assets/media/icon_media_carplay.png"
-                            onClicked: {
-                                console.log("[AllMenus] Apple CarPlay clicked")
-                                systemController.triggerProjection()
                             }
                         }
                     }

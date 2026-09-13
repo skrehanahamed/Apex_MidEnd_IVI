@@ -11,6 +11,7 @@ bin/
 out/
 cmake-build-*/
 .cache/
+cert/
 
 # CMake Generated Files
 CMakeFiles/

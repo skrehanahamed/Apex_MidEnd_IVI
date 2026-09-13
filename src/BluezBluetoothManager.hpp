@@ -62,6 +62,7 @@ public:
 
     // Adapter Control (Requirement 1, 2)
     QString adapterPath() const { return m_adapterPath; }
+    QString adapterAddress() const { return m_adapterAddress; }
     bool isPowered() const { return m_isPowered; }
     void setPowered(bool powered);
     bool isDiscoverable() const { return m_isDiscoverable; }
@@ -137,6 +138,7 @@ private:
     QVariantMap parseDeviceProperties(const QString &path, const QVariantMap &props) const;
 
     QString m_adapterPath{"/org/bluez/hci0"};
+    QString m_adapterAddress{"98:FE:54:2B:64:6F"};
     bool m_isPowered{true};
     bool m_isDiscoverable{false};
     bool m_targetDiscoverable{false};

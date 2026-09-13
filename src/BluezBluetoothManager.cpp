@@ -175,6 +175,15 @@ bool BluezBluetoothManager::init()
     setPowered(true);
     setDiscoverable(false);
 
+    QDBusInterface adapterProps(BLUEZ_SERVICE, m_adapterPath, PROPERTIES_INTERFACE, systemBus);
+    if (adapterProps.isValid()) {
+        QDBusReply<QVariant> addrReply = adapterProps.call("Get", ADAPTER_INTERFACE, "Address");
+        if (addrReply.isValid() && !addrReply.value().toString().isEmpty()) {
+            m_adapterAddress = addrReply.value().toString().trimmed().toUpper();
+            qInfo() << "[BluezManager] Queried real BlueZ adapter address:" << m_adapterAddress;
+        }
+    }
+
     // Initial enumeration of all paired and existing devices
     refreshAllManagedObjects();
 

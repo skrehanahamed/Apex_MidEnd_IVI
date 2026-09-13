@@ -18,6 +18,7 @@ Rectangle {
     signal amSelected()
     signal bluetoothSelected()
     signal usbSelected()
+    signal androidAutoSelected()
 
     property string selectedCard: ""
 
@@ -44,6 +45,8 @@ Rectangle {
             } else if (pendingSource === "usb") {
                 systemController.selectMediaSource("usb")
                 root.usbSelected()
+            } else if (pendingSource === "android_auto") {
+                root.androidAutoSelected()
             }
         }
     }
@@ -120,25 +123,29 @@ Rectangle {
                         }
                     }
 
-                    // 4. Android Auto
+                    // 4. Android Auto (Active / ON when Android phone or accessory detected)
                     MediaCard {
                         title: "Android Auto"
                         iconSource: "qrc:/assets/media/icon_media_androidauto.png"
-                        isActive: true
-                        isSelected: false
+                        isActive: (systemController.androidAutoConnected || systemController.androidAutoAttached)
+                        isSelected: root.selectedCard === "android_auto"
                         onClicked: {
-                            systemController.triggerProjection()
+                            if (isActive) {
+                                root.selectedCard = "android_auto"
+                                navTimer.pendingSource = "android_auto"
+                                navTimer.restart()
+                            }
                         }
                     }
 
-                    // 5. Apple CarPlay
+                    // 5. Apple CarPlay (Inactive / OFF since CarPlay is not connected)
                     MediaCard {
                         title: "Apple CarPlay"
                         iconSource: "qrc:/assets/media/icon_media_carplay.png"
-                        isActive: true
+                        isActive: false
                         isSelected: false
                         onClicked: {
-                            systemController.triggerProjection()
+                            // Dim / disabled when not connected
                         }
                     }
                 }

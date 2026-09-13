@@ -35,6 +35,7 @@ class QSoundEffect;
 class NativeAudioRecorder;
 class BluezBluetoothManager;
 class PbapSyncManager;
+class AndroidAutoManager;
 
 class RadioStreamWorker : public QObject {
     Q_OBJECT
@@ -95,6 +96,13 @@ class SystemController : public QObject {
     Q_PROPERTY(bool radioServerOnline READ radioServerOnline NOTIFY radioServerOnlineChanged)
     Q_PROPERTY(bool radioLoading READ radioLoading NOTIFY radioLoadingChanged)
     Q_PROPERTY(bool usbConnected READ usbConnected WRITE setUsbConnected NOTIFY usbConnectedChanged)
+    Q_PROPERTY(bool androidAutoAttached READ androidAutoAttached NOTIFY androidAutoAttachedChanged)
+    Q_PROPERTY(bool androidAutoConnected READ androidAutoConnected NOTIFY androidAutoConnectedChanged)
+    Q_PROPERTY(QString androidAutoDeviceName READ androidAutoDeviceName NOTIFY androidAutoDeviceNameChanged)
+    Q_PROPERTY(QString androidAutoStatus READ androidAutoStatus NOTIFY androidAutoStatusChanged)
+    Q_PROPERTY(int androidAutoAoaVersion READ androidAutoAoaVersion NOTIFY androidAutoAoaVersionChanged)
+    Q_PROPERTY(QString androidAutoTargetMode READ androidAutoTargetMode WRITE setAndroidAutoTargetMode NOTIFY androidAutoTargetModeChanged)
+    Q_PROPERTY(AndroidAutoManager* androidAutoManager READ androidAutoManager CONSTANT)
     Q_PROPERTY(int currentStationIndex READ currentStationIndex NOTIFY currentStationIndexChanged)
     Q_PROPERTY(bool phoneConnected READ isPhoneConnected NOTIFY phoneConnectionChanged)
     Q_PROPERTY(bool isBluetoothConnected READ isBluetoothConnected WRITE setBluetoothConnected NOTIFY bluetoothConnectionChanged)
@@ -149,6 +157,7 @@ class SystemController : public QObject {
     Q_PROPERTY(QString bluetoothAlbumArtUrl READ bluetoothAlbumArtUrl NOTIFY bluetoothAlbumArtUrlChanged)
     Q_PROPERTY(QString bluetoothRepeatMode READ bluetoothRepeatMode NOTIFY bluetoothRepeatModeChanged)
     Q_PROPERTY(bool bluetoothShuffleMode READ bluetoothShuffleMode NOTIFY bluetoothShuffleModeChanged)
+    Q_PROPERTY(QString bluetoothPlayerName READ bluetoothPlayerName NOTIFY bluetoothPlayerNameChanged)
     Q_PROPERTY(QString currentScenicBackground READ currentScenicBackground NOTIFY scenicBackgroundChanged)
     Q_PROPERTY(QString currentScenicBlurBackground READ currentScenicBlurBackground NOTIFY scenicBackgroundChanged)
     Q_PROPERTY(QString currentScenicArtwork READ currentScenicArtwork NOTIFY scenicBackgroundChanged)
@@ -365,6 +374,25 @@ public:
     bool radioLoading() const { return m_radioLoading; }
     bool usbConnected() const { return m_usbConnected; }
     void setUsbConnected(bool c);
+    bool androidAutoAttached() const;
+    bool androidAutoConnected() const;
+    QString androidAutoDeviceName() const;
+    QString androidAutoStatus() const;
+    int androidAutoAoaVersion() const;
+    QString androidAutoTargetMode() const { return m_androidAutoTargetMode; }
+    void setAndroidAutoTargetMode(const QString &m) {
+        if (m_androidAutoTargetMode != m) {
+            m_androidAutoTargetMode = m;
+            emit androidAutoTargetModeChanged();
+        }
+    }
+    Q_INVOKABLE void openAndroidAuto(const QString &mode = "menu");
+    Q_INVOKABLE void triggerAndroidAutoHandshake();
+    Q_INVOKABLE void startAndroidAuto();
+    AndroidAutoManager* androidAutoManager() const { return m_androidAutoManager; }
+    Q_INVOKABLE void sendAndroidAutoTouch(int action, int x, int y);
+    Q_INVOKABLE void sendAndroidAutoKey(int keyCode);
+    Q_INVOKABLE void openAndroidAutoPhone();
     int currentStationIndex() const { return m_currentStationIndex; }
     bool isPhoneConnected() const { return m_phoneConnected; }
     bool isBluetoothConnected() const { return m_bluetoothConnected; }
@@ -467,6 +495,7 @@ public:
     QString bluetoothAlbumArtUrl() const { return m_bluetoothAlbumArtUrl; }
     QString bluetoothRepeatMode() const { return m_bluetoothRepeatMode; }
     bool bluetoothShuffleMode() const { return m_bluetoothShuffleMode; }
+    QString bluetoothPlayerName() const { return m_bluetoothPlayerName; }
     QString currentScenicBackground() const {
         static const QStringList bgs = {
             "qrc:/assets/media/scenic_city.jpg",
@@ -656,6 +685,7 @@ signals:
     void bluetoothAlbumArtUrlChanged();
     void bluetoothRepeatModeChanged();
     void bluetoothShuffleModeChanged();
+    void bluetoothPlayerNameChanged();
     void scenicBackgroundChanged();
     void remoteCallStarted(const QString &name, const QString &number, const QString &status);
     void remoteCallStatusChanged(const QString &status);
@@ -690,6 +720,13 @@ signals:
     void radioServerOnlineChanged();
     void radioLoadingChanged();
     void usbConnectedChanged();
+    void androidAutoAttachedChanged();
+    void androidAutoConnectedChanged();
+    void androidAutoDeviceNameChanged();
+    void androidAutoStatusChanged();
+    void androidAutoAoaVersionChanged();
+    void androidAutoTargetModeChanged();
+    void androidAutoFrameReady(const QImage &frame);
     void currentStationIndexChanged();
     void reverseGearChanged();
     void volumeChanged();
@@ -710,6 +747,8 @@ private:
     void releaseCallAudioFocus();
     void setBluetoothMediaPlayback(bool play);
     BluezBluetoothManager *m_bluezManager{nullptr};
+    AndroidAutoManager *m_androidAutoManager{nullptr};
+    QString m_androidAutoTargetMode{"menu"};
     bool m_isPairingPromptActive{false};
     bool m_isPairingAuthWaiting{false};
     QString m_incomingPairingDeviceName;
@@ -824,6 +863,7 @@ private:
     QString m_bluetoothAlbumArtUrl{""};
     QString m_bluetoothRepeatMode{"off"};
     bool m_bluetoothShuffleMode{false};
+    QString m_bluetoothPlayerName{""};
     int m_scenicIndex{0};
     mutable QString m_cachedPlayerPath{""};
     QTimer *m_bluetoothMediaProgressTimer{nullptr};

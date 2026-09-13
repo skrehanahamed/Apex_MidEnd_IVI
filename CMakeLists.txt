@@ -10,7 +10,7 @@ cmake_minimum_required(VERSION 3.20)
 # [VERSION_CONFIG] Update version numbers below when new release is given:
 # ============================================================================
 set(APEX_IVI_VERSION_MAJOR 1)
-set(APEX_IVI_VERSION_MINOR 1)
+set(APEX_IVI_VERSION_MINOR 2)
 set(APEX_IVI_VERSION_PATCH 0)
 set(APEX_IVI_VERSION_STRING "v${APEX_IVI_VERSION_MAJOR}.${APEX_IVI_VERSION_MINOR}.${APEX_IVI_VERSION_PATCH}")
 
@@ -25,6 +25,7 @@ set(CMAKE_AUTOUIC ON)
 
 add_compile_definitions(APEX_IVI_VERSION_STRING="${APEX_IVI_VERSION_STRING}")
 add_compile_definitions(APEX_IVI_VERSION_RAW="${PROJECT_VERSION}")
+add_compile_definitions(BOOST_LOG_DYN_LINK)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick Qml QuickControls2 Multimedia DBus Network)
 
@@ -40,11 +41,44 @@ if(APPLE)
         "-framework Foundation"
     )
 else()
+    # Use the maintained AASDK transport/messenger implementation instead of
+    # relying solely on its generated protobuf archive.  AndroidAutoSession is
+    # being migrated to these service channels for standards-compliant input.
+file(GLOB_RECURSE AASDK_RUNTIME_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/../aasdk/src/*.cpp")
+list(FILTER AASDK_RUNTIME_SOURCES EXCLUDE REGEX "\\.ut\\.cpp$")
+    # The existing recipe generates protobuf headers flat in gen_proto while
+    # AASDK includes them as <aasdk_proto/...>.  Provide that expected include
+    # namespace in the build directory without modifying generated files.
+    file(CREATE_LINK "${CMAKE_SOURCE_DIR}/../aasdk/gen_proto"
+                     "${CMAKE_BINARY_DIR}/aasdk_proto" SYMBOLIC)
+
     set(PLATFORM_SOURCES
         src/NativeAudioRecorder.h
         src/NativeAudioRecorder.cpp
     )
-    set(PLATFORM_LIBS "")
+    set(PLATFORM_LIBS 
+        usb-1.0 ssl crypto avcodec avformat avutil swscale asound
+        ${CMAKE_SOURCE_DIR}/../aasdk/libaasdk_proto.a
+        -Wl,--no-as-needed
+        protobuf boost_system boost_log boost_log_setup boost_thread boost_filesystem
+        -labsl_log_internal_check_op -labsl_leak_check -labsl_die_if_null -labsl_log_internal_conditions -labsl_log_internal_message -labsl_examine_stack -labsl_log_internal_format -labsl_log_internal_proto -labsl_log_internal_nullguard -labsl_log_internal_log_sink_set -labsl_log_sink -labsl_log_entry -labsl_flags_internal -labsl_flags_marshalling -labsl_flags_reflection -labsl_flags_private_handle_accessor -labsl_flags_commandlineflag -labsl_flags_commandlineflag_internal -labsl_flags_config -labsl_flags_program_name -labsl_log_initialize -labsl_log_globals -labsl_vlog_config_internal -labsl_log_internal_fnmatch -labsl_log_internal_globals -labsl_raw_hash_set -labsl_hash -labsl_city -labsl_low_level_hash -labsl_hashtablez_sampler -labsl_statusor -labsl_status -labsl_cord -labsl_cordz_info -labsl_cord_internal -labsl_cordz_functions -labsl_exponential_biased -labsl_cordz_handle -labsl_crc_cord_state -labsl_crc32c -labsl_crc_internal -labsl_crc_cpu_detect -labsl_bad_optional_access -labsl_strerror -labsl_str_format_internal -labsl_synchronization -labsl_graphcycles_internal -labsl_kernel_timeout_internal -labsl_stacktrace -labsl_symbolize -labsl_debugging_internal -labsl_demangle_internal -labsl_malloc_internal -labsl_time -labsl_civil_time -labsl_time_zone -labsl_bad_variant_access -lutf8_validity -lutf8_range -labsl_strings -labsl_strings_internal -labsl_string_view -labsl_base -lrt -labsl_spinlock_wait -labsl_int128 -labsl_throw_delegate -labsl_raw_logging_internal -labsl_log_severity
+        -Wl,--as-needed
+    )
+    include_directories(
+        ${CMAKE_BINARY_DIR}
+        ${CMAKE_SOURCE_DIR}/../aasdk
+        ${CMAKE_SOURCE_DIR}/../aasdk/gen_proto
+        ${CMAKE_SOURCE_DIR}/../aasdk/include
+        /workspace/build/tmp/sysroots-components/cortexa76/protobuf/usr/include
+        /workspace/build/tmp/sysroots-components/cortexa76/abseil-cpp/usr/include
+        /workspace/build/tmp/sysroots-components/cortexa76/boost/usr/include
+    )
+    link_directories(
+        /workspace/build/tmp/sysroots-components/cortexa76/protobuf/usr/lib
+        /workspace/build/tmp/sysroots-components/cortexa76/abseil-cpp/usr/lib
+        /workspace/build/tmp/sysroots-components/cortexa76/boost/usr/lib
+    )
 endif()
 
 add_executable(ApexIVI
@@ -55,6 +89,17 @@ add_executable(ApexIVI
     src/BluezBluetoothManager.cpp
     src/PbapSyncManager.hpp
     src/PbapSyncManager.cpp
+    src/AndroidAutoManager.hpp
+    src/AndroidAutoManager.cpp
+    src/AndroidAutoH264Decoder.hpp
+    src/AndroidAutoH264Decoder.cpp
+    src/AndroidAutoAudioSink.hpp
+    src/AndroidAutoAudioSink.cpp
+    src/AndroidAutoSession.hpp
+    src/AndroidAutoSession.cpp
+    src/AndroidAutoVideoItem.hpp
+    src/AndroidAutoVideoItem.cpp
+    ${AASDK_RUNTIME_SOURCES}
     ${PLATFORM_SOURCES}
     resources.qrc
 )
@@ -79,3 +124,4 @@ set_target_properties(ApexIVI PROPERTIES
 
 include(GNUInstallDirs)
 install(TARGETS ApexIVI RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES THIRD_PARTY_LICENSES.md DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/ApexIVI)

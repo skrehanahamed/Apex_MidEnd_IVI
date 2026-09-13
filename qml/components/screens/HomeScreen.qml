@@ -51,7 +51,7 @@ Item {
             id: leftCard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: leftMouse.pressed ? "#141D2C" : "#0D1624"
+            color: leftMouse.pressed ? "#0B0E14" : "#05070B"
 
             Behavior on color { ColorAnimation { duration: 100 } }
 
@@ -118,7 +118,7 @@ Item {
                 anchors.centerIn: parent
                 spacing: 28
                 width: parent.width * 0.92
-                visible: systemController.leftWidget === "phone_projection"
+                visible: systemController.leftWidget === "phone_projection" && !systemController.androidAutoConnected
 
                 Image {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -140,6 +140,11 @@ Item {
                     font.weight: Font.Normal
                     font.family: "Roboto"
                 }
+            }
+
+            // Connected Android Auto & Map Split Widget (Left)
+            ConnectedProjectionWidget {
+                visible: systemController.leftWidget === "phone_projection" && systemController.androidAutoConnected
             }
 
             // Subtle press border / glow
@@ -195,7 +200,6 @@ Item {
                         if (systemController.leftWidget === "radio_media") {
                             root.radioClicked()
                         } else if (systemController.leftWidget === "phone_projection") {
-                            systemController.triggerProjection()
                             root.projectionClicked()
                         }
                     }
@@ -225,7 +229,7 @@ Item {
             id: rightCard
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: rightMouse.pressed ? "#141D2C" : "#0D1624"
+            color: rightMouse.pressed ? "#0B0E14" : "#05070B"
 
             Behavior on color { ColorAnimation { duration: 100 } }
 
@@ -234,7 +238,7 @@ Item {
                 anchors.centerIn: parent
                 spacing: 28
                 width: parent.width * 0.92
-                visible: systemController.rightWidget === "phone_projection"
+                visible: systemController.rightWidget === "phone_projection" && !systemController.androidAutoConnected
 
                 Image {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -256,6 +260,11 @@ Item {
                     font.weight: Font.Normal
                     font.family: "Roboto"
                 }
+            }
+
+            // Connected Android Auto & Map Split Widget (Right)
+            ConnectedProjectionWidget {
+                visible: systemController.rightWidget === "phone_projection" && systemController.androidAutoConnected
             }
 
             // 2. Clock Widget (if set on right)
@@ -365,7 +374,6 @@ Item {
                     rightHoldProgress.width = 0
                     if (!root.rightHoldTriggered) {
                         if (systemController.rightWidget === "phone_projection") {
-                            systemController.triggerProjection()
                             root.projectionClicked()
                         } else if (systemController.rightWidget === "radio_media") {
                             root.radioClicked()
@@ -701,83 +709,123 @@ Item {
                 width: parent.width - 48
                 spacing: 10
 
-                // Large prominent Track Title: "Hymn for the Weekend"
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
+                // Large prominent Track Title with auto-scrolling marquee when text overflows
+                Item {
+                    id: titleContainer
                     width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
-                    text: (systemController.selectedMediaSource === "bluetooth")
-                          ? (systemController.bluetoothTrackTitle.length > 0 ? systemController.bluetoothTrackTitle : "Bluetooth Audio")
-                          : (systemController.selectedMediaSource === "usb" ? "sample4 mp3.mp3" : "Radio / Media")
-                    color: "#FFFFFF"
-                    font.pixelSize: 44
-                    font.weight: Font.Bold
-                    font.family: "Roboto"
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
+                    height: titleText.paintedHeight > 0 ? titleText.paintedHeight : 54
+                    clip: true
+
+                    property bool overflows: titleText.paintedWidth > width
+                    property real scrollDistance: overflows ? (titleText.paintedWidth - width + 24) : 0
+
+                    Text {
+                        id: titleText
+                        text: (systemController.selectedMediaSource === "bluetooth")
+                              ? (systemController.bluetoothTrackTitle.length > 0
+                                    ? systemController.bluetoothTrackTitle
+                                    : (systemController.bluetoothPlayerName.length > 0 ? systemController.bluetoothPlayerName : "Bluetooth Audio"))
+                              : (systemController.selectedMediaSource === "usb" ? "sample4 mp3.mp3" : "Radio / Media")
+                        color: "#FFFFFF"
+                        font.pixelSize: 44
+                        font.weight: Font.Bold
+                        font.family: "Roboto"
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: titleContainer.overflows ? undefined : parent.horizontalCenter
+                        x: 0
+
+                        SequentialAnimation on x {
+                            running: titleContainer.overflows
+                            loops: Animation.Infinite
+                            alwaysRunToEnd: false
+
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: -titleContainer.scrollDistance
+                                duration: Math.max(2500, titleContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: 0
+                                duration: Math.max(2500, titleContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                        }
+
+                        onTextChanged: {
+                            x = 0
+                        }
+                    }
                 }
 
-                // Station RDS / Artist name: "Coldplay"
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
+                // Station RDS / Artist name with auto-scrolling marquee when text overflows
+                Item {
+                    id: artistContainer
                     width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
-                    text: systemController.bluetoothTrackArtist || ((systemController.bluetoothConnectedDeviceName && systemController.bluetoothConnectedDeviceName.length > 0) ? systemController.bluetoothConnectedDeviceName : "No artist information")
-                    color: "#DCE7F5"
-                    font.pixelSize: 25
-                    font.weight: Font.DemiBold
-                    font.family: "Roboto"
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
+                    height: artistText.paintedHeight > 0 ? artistText.paintedHeight : 32
+                    clip: true
+
+                    property bool overflows: artistText.paintedWidth > width
+                    property real scrollDistance: overflows ? (artistText.paintedWidth - width + 24) : 0
+
+                    Text {
+                        id: artistText
+                        text: systemController.bluetoothTrackArtist || ((systemController.bluetoothConnectedDeviceName && systemController.bluetoothConnectedDeviceName.length > 0) ? systemController.bluetoothConnectedDeviceName : "No artist information")
+                        color: "#DCE7F5"
+                        font.pixelSize: 25
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: artistContainer.overflows ? undefined : parent.horizontalCenter
+                        x: 0
+
+                        SequentialAnimation on x {
+                            running: artistContainer.overflows
+                            loops: Animation.Infinite
+                            alwaysRunToEnd: false
+
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: -artistContainer.scrollDistance
+                                duration: Math.max(2500, artistContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: 0
+                                duration: Math.max(2500, artistContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                        }
+
+                        onTextChanged: {
+                            x = 0
+                        }
+                    }
                 }
             }
 
-            // 5 Playback Control Buttons: [ 🔁 ]   [ |<< ]   [ || / ▶ ]   [ >>| ]   [ 🔀 ]
+            // 3 Playback Control Buttons: [ |◀◀ ]   [ ▶ / ❚❚ ]   [ ▶▶| ]
             Row {
                 id: mediaControlsRow
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: mediaProgressBarItem.top
-                anchors.bottomMargin: 18
-                spacing: 24
+                anchors.bottomMargin: 20
+                spacing: 36
 
-                // 1. Repeat Button
+                // 1. Previous Track [ |◀◀ ]
                 Rectangle {
-                    width: 44
-                    height: 44
-                    radius: 22
-                    color: (systemController.bluetoothRepeatMode !== "off") ? "#183B60" : "transparent"
-                    border.color: (systemController.bluetoothRepeatMode !== "off") ? "#38B6FF" : "transparent"
-                    border.width: 1
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "🔁"
-                        font.pixelSize: 20
-                        scale: rptMouse.pressed ? 0.9 : 1.0
-                    }
-
-                    MouseArea {
-                        id: rptMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        preventStealing: true
-                        onClicked: systemController.toggleBluetoothRepeat()
-                    }
-                }
-
-                // 2. Previous Track [ |<< ]
-                Rectangle {
-                    width: 44
-                    height: 44
-                    radius: 22
+                    width: 48
+                    height: 48
+                    radius: 24
                     color: prevTrackMouse.pressed ? "#1E334D" : "transparent"
 
                     Text {
                         anchors.centerIn: parent
                         text: "|◀◀"
                         color: prevTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
-                        font.pixelSize: 22
+                        font.pixelSize: 24
                         scale: prevTrackMouse.pressed ? 0.9 : 1.0
                     }
 
@@ -791,18 +839,18 @@ Item {
                     }
                 }
 
-                // 3. Play / Pause [ || / ▶ ]
+                // 2. Play / Pause [ ▶ / ❚❚ ]
                 Rectangle {
-                    width: 48
-                    height: 48
-                    radius: 24
+                    width: 52
+                    height: 52
+                    radius: 26
                     color: playTrackMouse.pressed ? "#1E334D" : "transparent"
 
                     Text {
                         anchors.centerIn: parent
                         text: (systemController.bluetoothPlaybackStatus === "playing") ? "❚❚" : "▶"
                         color: playTrackMouse.pressed ? "#70D6FF" : "#FFFFFF"
-                        font.pixelSize: 26
+                        font.pixelSize: 28
                         scale: playTrackMouse.pressed ? 0.9 : 1.0
                     }
 
@@ -816,18 +864,18 @@ Item {
                     }
                 }
 
-                // 4. Next Track [ >>| ]
+                // 3. Next Track [ ▶▶| ]
                 Rectangle {
-                    width: 44
-                    height: 44
-                    radius: 22
+                    width: 48
+                    height: 48
+                    radius: 24
                     color: nextTrackMouse.pressed ? "#1E334D" : "transparent"
 
                     Text {
                         anchors.centerIn: parent
                         text: "▶▶|"
                         color: nextTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
-                        font.pixelSize: 22
+                        font.pixelSize: 24
                         scale: nextTrackMouse.pressed ? 0.9 : 1.0
                     }
 
@@ -838,32 +886,6 @@ Item {
                         cursorShape: Qt.PointingHandCursor
                         preventStealing: true
                         onClicked: systemController.bluetoothMediaNext()
-                    }
-                }
-
-                // 5. Shuffle Button [ 🔀 ]
-                Rectangle {
-                    width: 44
-                    height: 44
-                    radius: 22
-                    color: systemController.bluetoothShuffleMode ? "#183B60" : "transparent"
-                    border.color: systemController.bluetoothShuffleMode ? "#38B6FF" : "transparent"
-                    border.width: 1
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "🔀"
-                        font.pixelSize: 20
-                        scale: shufMouse.pressed ? 0.9 : 1.0
-                    }
-
-                    MouseArea {
-                        id: shufMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        preventStealing: true
-                        onClicked: systemController.toggleBluetoothShuffle()
                     }
                 }
             }
@@ -943,6 +965,118 @@ Item {
                 color: "#7B92AB"
                 font.pixelSize: 18
                 font.family: "Roboto"
+            }
+        }
+    }
+
+    // ====================================================
+    // COMPONENT: Connected Android Auto & Map Widget (Matching Genuine Photo)
+    // ====================================================
+    component ConnectedProjectionWidget: Item {
+        id: projWidget
+        anchors.fill: parent
+        z: 15
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
+
+            // 1. TOP HALF: Android Auto Button
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: aaMouse.pressed ? "#141F30" : "transparent"
+                radius: 4
+
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: Math.round(parent.width * 0.20)
+                    spacing: 32
+
+                    Image {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 104
+                        height: 104
+                        source: "qrc:/assets/media/icon_media_androidauto.png"
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        mipmap: true
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Android\nAuto"
+                        color: "#FFFFFF"
+                        font.pixelSize: 36
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                        lineHeight: 1.12
+                    }
+                }
+
+                MouseArea {
+                    id: aaMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        console.log("[HomeScreen] Android Auto clicked from widget -> Opening Android Auto Menu")
+                        systemController.openAndroidAuto("menu")
+                    }
+                }
+            }
+
+            // HORIZONTAL DIVIDER (Matching genuine photo hairline)
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1.5
+                color: "#1E2736"
+            }
+
+            // 2. BOTTOM HALF: Map Button
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: mapMouse.pressed ? "#141F30" : "transparent"
+                radius: 4
+
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: Math.round(parent.width * 0.20)
+                    spacing: 32
+
+                    Image {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 104
+                        height: 104
+                        source: "qrc:/assets/ui/icon_projection_map.png"
+                        fillMode: Image.PreserveAspectFit
+                        smooth: true
+                        mipmap: true
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "Map"
+                        color: "#FFFFFF"
+                        font.pixelSize: 38
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
+                }
+
+                MouseArea {
+                    id: mapMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        console.log("[HomeScreen] Map clicked from widget -> Opening Android Auto Map")
+                        systemController.openAndroidAuto("map")
+                    }
+                }
             }
         }
     }

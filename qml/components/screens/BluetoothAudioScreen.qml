@@ -248,7 +248,11 @@ Rectangle {
                     // Track Title
                     Text {
                         Layout.fillWidth: true
-                        text: (systemController.bluetoothTrackTitle.length > 0) ? systemController.bluetoothTrackTitle : (systemController.bluetoothConnected ? "No Media Playing" : "Bluetooth Audio")
+                        text: (systemController.bluetoothTrackTitle.length > 0)
+                              ? systemController.bluetoothTrackTitle
+                              : (systemController.bluetoothPlayerName.length > 0
+                                 ? systemController.bluetoothPlayerName
+                                 : (systemController.bluetoothConnected ? "No Media Playing" : "Bluetooth Audio"))
                         color: "#FFFFFF"
                         font.pixelSize: 36
                         font.weight: Font.Bold
@@ -260,7 +264,11 @@ Rectangle {
                     // Artist Name
                     Text {
                         Layout.fillWidth: true
-                        text: (systemController.bluetoothTrackArtist.length > 0) ? systemController.bluetoothTrackArtist : (systemController.bluetoothConnected ? "Press Play on phone or tap ▶ to start" : "Connect your phone via Bluetooth")
+                        text: (systemController.bluetoothTrackArtist.length > 0)
+                              ? systemController.bluetoothTrackArtist
+                              : ((systemController.bluetoothConnectedDeviceName && systemController.bluetoothConnectedDeviceName.length > 0)
+                                 ? systemController.bluetoothConnectedDeviceName
+                                 : (systemController.bluetoothConnected ? "Press Play on phone or tap ▶ to start" : "Connect your phone via Bluetooth"))
                         color: "#CAD8E6"
                         font.pixelSize: 22
                         font.weight: Font.Medium
@@ -291,9 +299,8 @@ Rectangle {
                     Item { height: 26 }
 
                     // Playback Controls Row: [ |◀◀ ]   [ ▶ / ❚❚ ]   [ ▶▶| ]
-                    // USER REQUIREMENT: NO circle borders, NO background circles, clean white icons, zero layout jump
                     Row {
-                        spacing: 48
+                        spacing: 52
                         Layout.alignment: Qt.AlignLeft
 
                         // 1. Previous Track Button [ |◀◀ ]
@@ -305,7 +312,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: "|◀◀"
                                 color: prevMouse.pressed ? "#70D6FF" : (prevMouse.containsMouse ? "#B0E2FF" : "#FFFFFF")
-                                font.pixelSize: 28
+                                font.pixelSize: 32
                                 font.weight: Font.Bold
                                 Behavior on color { ColorAnimation { duration: 80 } }
                             }
@@ -332,7 +339,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: (systemController.bluetoothPlaybackStatus === "playing") ? "❚❚" : "▶"
                                 color: playMouse.pressed ? "#70D6FF" : (playMouse.containsMouse ? "#B0E2FF" : "#FFFFFF")
-                                font.pixelSize: 34
+                                font.pixelSize: 36
                                 font.weight: Font.Bold
                                 Behavior on color { ColorAnimation { duration: 80 } }
                             }
@@ -359,7 +366,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: "▶▶|"
                                 color: nextMouse.pressed ? "#70D6FF" : (nextMouse.containsMouse ? "#B0E2FF" : "#FFFFFF")
-                                font.pixelSize: 28
+                                font.pixelSize: 32
                                 font.weight: Font.Bold
                                 Behavior on color { ColorAnimation { duration: 80 } }
                             }
@@ -393,7 +400,7 @@ Rectangle {
                             font.pixelSize: 18
                             font.weight: Font.Normal
                             font.family: "Roboto"
-                            opacity: (systemController.bluetoothTrackTitle.length === 0 || systemController.bluetoothPlaybackStatus !== "playing") ? 1.0 : 0.0
+                            opacity: ((systemController.bluetoothTrackTitle.length === 0 && systemController.bluetoothPlayerName.length === 0) || systemController.bluetoothPlaybackStatus !== "playing") ? 1.0 : 0.0
                             Behavior on opacity { NumberAnimation { duration: 250 } }
                         }
                     }
@@ -415,11 +422,11 @@ Rectangle {
                         border.width: 1.5
                         clip: true
 
-                        // Scenic Landscape Artwork Graphic (Randomized scenic photo matching genuine OEM UI)
+                        // Scenic Landscape Artwork Graphic (Normal unblurred background photo)
                         Image {
                             id: fallbackArtwork
                             anchors.fill: parent
-                            source: systemController.currentScenicArtwork
+                            source: systemController.currentScenicBackground
                             fillMode: Image.PreserveAspectCrop
                             smooth: true
                             mipmap: true
@@ -435,7 +442,7 @@ Rectangle {
                             smooth: true
                             mipmap: true
                             cache: false
-                            visible: (source != "" && status === Image.Ready)
+                            visible: (source !== "" && status === Image.Ready)
                         }
 
                         // Subtle inner gloss border overlay
