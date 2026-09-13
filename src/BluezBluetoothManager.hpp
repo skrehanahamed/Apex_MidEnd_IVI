@@ -36,9 +36,9 @@ public slots:
     void Release();
     QString RequestPinCode(const QDBusObjectPath &device);
     void DisplayPinCode(const QDBusObjectPath &device, const QString &pincode);
-    uint RequestPasskey(const QDBusObjectPath &device);
-    void DisplayPasskey(const QDBusObjectPath &device, uint passkey, ushort entered);
-    void RequestConfirmation(const QDBusObjectPath &device, uint passkey, const QDBusMessage &message);
+    quint32 RequestPasskey(const QDBusObjectPath &device);
+    void DisplayPasskey(const QDBusObjectPath &device, quint32 passkey, quint16 entered);
+    void RequestConfirmation(const QDBusObjectPath &device, quint32 passkey, const QDBusMessage &message);
     void RequestAuthorization(const QDBusObjectPath &device);
     void AuthorizeService(const QDBusObjectPath &device, const QString &uuid);
     void Cancel();

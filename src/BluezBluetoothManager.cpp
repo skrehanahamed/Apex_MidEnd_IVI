@@ -45,18 +45,18 @@ void BluezAgentAdaptor::DisplayPinCode(const QDBusObjectPath &device, const QStr
 uint BluezAgentAdaptor::RequestPasskey(const QDBusObjectPath &device)
 {
     bool ok = false;
-    uint pk = m_manager->passkey().toUInt(&ok);
+    quint32 pk = m_manager->passkey().toUInt(&ok);
     qDebug() << "[BluezAgent] RequestPasskey for device:" << device.path() << "returning:" << (ok ? pk : 0);
     return ok ? pk : 0;
 }
 
-void BluezAgentAdaptor::DisplayPasskey(const QDBusObjectPath &device, uint passkey, ushort entered)
+void BluezAgentAdaptor::DisplayPasskey(const QDBusObjectPath &device, quint32 passkey, quint16 entered)
 {
     Q_UNUSED(entered);
     qDebug() << "[BluezAgent] DisplayPasskey for device:" << device.path() << "Passkey:" << passkey;
 }
 
-void BluezAgentAdaptor::RequestConfirmation(const QDBusObjectPath &device, uint passkey, const QDBusMessage &message)
+void BluezAgentAdaptor::RequestConfirmation(const QDBusObjectPath &device, quint32 passkey, const QDBusMessage &message)
 {
     message.setDelayedReply(true);
     m_manager->m_pendingConfirmationMessage = message;

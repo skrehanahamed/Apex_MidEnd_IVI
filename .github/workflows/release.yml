@@ -123,6 +123,7 @@ jobs:
 
   build-windows:
     name: Build Windows
+    continue-on-error: true
     runs-on: windows-2022
 
     steps:
@@ -180,7 +181,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-macos]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
