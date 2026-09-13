@@ -91,6 +91,10 @@ Rectangle {
 
         function onBluetoothCallActiveChanged() {
             console.log("[PhoneScreen] bluetoothCallActive changed:", systemController.bluetoothCallActive)
+            if (systemController.androidAutoConnected && systemController.currentScreen === "android_auto") {
+                console.log("[PhoneScreen] Android Auto screen is active -> suppressing IVI call overlay")
+                return
+            }
             if (!systemController.bluetoothCallActive) {
                 if (root.isCallActive) root.endActiveCall(false)
             } else {
@@ -117,6 +121,10 @@ Rectangle {
 
         function onRemoteCallStarted(name, number, status) {
             console.log("[PhoneScreen] Mobile phone initiated call! Name:", name, "Number:", number, "Status:", status)
+            if (systemController.androidAutoConnected && systemController.currentScreen === "android_auto") {
+                console.log("[PhoneScreen] Android Auto screen is active -> suppressing IVI call overlay")
+                return
+            }
             if (callEndedDismissTimer.running) {
                 console.log("[PhoneScreen] Ignoring remoteCallStarted while dismiss timer is running")
                 return
@@ -136,6 +144,10 @@ Rectangle {
 
         function onRemoteCallStatusChanged(status) {
             console.log("[PhoneScreen] Mobile phone call status changed:", status)
+            if (systemController.androidAutoConnected && systemController.currentScreen === "android_auto") {
+                console.log("[PhoneScreen] Android Auto screen is active -> suppressing IVI call overlay")
+                return
+            }
             if (status === "active") {
                 callEndedDismissTimer.stop()
                 activeCallOverlay.opacity = 1.0
@@ -256,11 +268,20 @@ Rectangle {
     function confirmPendingCall() {
         if (!showDialConfirmation || pendingCallNumber.length === 0 || isCallActive) return
         var callTarget = pendingCallNumber
-        activeCallName = pendingCallName
-        activeCallNumber = pendingCallNumber
+        var targetName = pendingCallName
         showDialConfirmation = false
         pendingCallName = ""
         pendingCallNumber = ""
+
+        if (systemController.androidAutoConnected) {
+            console.log("[PhoneScreen] Android Auto is connected -> Initiating call and switching to Android Auto caller:", callTarget)
+            systemController.dialNumber(callTarget)
+            systemController.openAndroidAutoPhone()
+            return
+        }
+
+        activeCallName = targetName
+        activeCallNumber = callTarget
         activeCallDurationSeconds = 0
         callStatus = "calling"
         isCallMuted = false
@@ -761,7 +782,7 @@ Rectangle {
             // ------------------------------------------------
             Item {
                 anchors.fill: parent
-                visible: systemController.hasHandsFreeDevice
+                visible: systemController.hasHandsFreeDevice || systemController.androidAutoConnected
 
                 // ============================================
                 // TAB 1: RECENTS / CALL HISTORY VIEW (Photo 1 Match!)
@@ -1398,7 +1419,7 @@ Rectangle {
                             // 1. Phone Name
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: (systemController.activeHandsFreeDeviceName !== "" ? systemController.activeHandsFreeDeviceName : (systemController.detectedBluetoothName !== "" ? systemController.detectedBluetoothName : "Connected Phone"))
+                                text: (systemController.androidAutoConnected && systemController.androidAutoDeviceName !== "") ? systemController.androidAutoDeviceName : (systemController.activeHandsFreeDeviceName !== "" ? systemController.activeHandsFreeDeviceName : (systemController.detectedBluetoothName !== "" ? systemController.detectedBluetoothName : (systemController.androidAutoConnected ? "Android Auto Phone" : "Connected Phone")))
                                 color: "#BACBDD"
                                 font.pixelSize: 19
                                 font.weight: Font.DemiBold
@@ -1670,7 +1691,7 @@ Rectangle {
             Column {
                 anchors.centerIn: parent
                 spacing: 24
-                visible: !systemController.hasHandsFreeDevice
+                visible: !systemController.hasHandsFreeDevice && !systemController.androidAutoConnected
 
                 Image {
                     anchors.horizontalCenter: parent.horizontalCenter

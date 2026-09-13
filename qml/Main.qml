@@ -237,15 +237,9 @@ Window {
             mainWindow.previousScreenBeforePhone = systemController.currentScreen
         }
 
-        if (systemController.androidAutoConnected) {
-            console.log("[Main] Android Auto is connected -> Redirecting to Android Auto Caller")
-            systemController.openAndroidAutoPhone()
-            return
-        }
-
-        var isConnected = systemController.hasHandsFreeDevice
+        var isConnected = systemController.hasHandsFreeDevice || systemController.androidAutoConnected
         if (!isConnected) {
-            console.log("[Main] Phone app requested but no hands-free phone is connected -> displaying noPhoneDialog")
+            console.log("[Main] Phone app requested but no hands-free phone or Android Auto is connected -> displaying noPhoneDialog")
             noPhoneDialog.visible = true
             return
         }
@@ -1219,6 +1213,7 @@ Window {
         z: 1200
         visible: systemController.bluetoothCallActive
                  && systemController.bluetoothCallStatus === "incoming"
+                 && systemController.currentScreen !== "android_auto"
         callerName: systemController.bluetoothCallName
         callerNumber: systemController.bluetoothCallNumber
         privacyMode: systemController.privacyMode
@@ -1226,7 +1221,11 @@ Window {
         onAccepted: {
             mainWindow.previousScreenBeforePhone = systemController.currentScreen
             systemController.answerCall()
-            systemController.navigateTo("phone")
+            if (systemController.androidAutoConnected) {
+                systemController.openAndroidAutoPhone()
+            } else {
+                systemController.navigateTo("phone")
+            }
         }
 
         onRejected: systemController.hangUpCall()

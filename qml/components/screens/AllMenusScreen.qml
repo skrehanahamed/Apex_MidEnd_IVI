@@ -294,8 +294,8 @@ Rectangle {
                         columnSpacing: 48
 
                         MenuAppCard {
-                            title: systemController.androidAutoConnected ? "Android Auto Phone" : "Phone"
-                            iconSrc: systemController.androidAutoConnected ? "qrc:/assets/phone/icon_phone_green.png" : "qrc:/assets/apps/icon_all_phone.png"
+                            title: "Phone"
+                            iconSrc: "qrc:/assets/apps/icon_all_phone.png"
                             onClicked: {
                                 console.log("[AllMenus] Phone clicked")
                                 root.phoneClicked()

@@ -879,10 +879,6 @@ void SystemController::setCurrentScreen(const QString &screen)
 
 void SystemController::navigateTo(const QString &screen)
 {
-    if (screen == "phone" && androidAutoConnected()) {
-        openAndroidAutoPhone();
-        return;
-    }
     setCurrentScreen(screen);
 }
 

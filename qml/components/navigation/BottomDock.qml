@@ -44,7 +44,7 @@ Rectangle {
     function getIconSource(iconId) {
         switch (iconId) {
             case "all_menus": return "qrc:/assets/apps/icon_all_menus.png"
-            case "phone": return (systemController && systemController.androidAutoConnected) ? "qrc:/assets/phone/icon_phone_green.png" : "qrc:/assets/apps/icon_all_phone.png"
+            case "phone": return "qrc:/assets/apps/icon_all_phone.png"
             case "media": return "qrc:/assets/apps/icon_all_media.png"
             case "settings": return "qrc:/assets/apps/icon_all_settings.png"
             case "projection": return "qrc:/assets/apps/icon_all_projection.png"
@@ -60,7 +60,7 @@ Rectangle {
     function getIconLabel(iconId) {
         switch (iconId) {
             case "all_menus": return "All menus"
-            case "phone": return (systemController && systemController.androidAutoConnected) ? "AA Phone" : "Phone"
+            case "phone": return "Phone"
             case "media": return "Media"
             case "settings": return "Settings"
             case "projection": return "Projection"
