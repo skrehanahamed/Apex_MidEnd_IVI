@@ -109,6 +109,7 @@ private:
     SystemController *m_controller{nullptr};
 };
 
+#ifndef _WIN32
 #include <execinfo.h>
 #include <signal.h>
 #include <unistd.h>
@@ -121,11 +122,14 @@ static void crashHandler(int sig) {
     fflush(stderr);
     _exit(1);
 }
+#endif
 
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
+#endif
     fprintf(stdout, "[MAIN] Step 1: Starting Apex IVI\n");
     fflush(stdout);
 
