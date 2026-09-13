@@ -8,8 +8,9 @@
 #include <QQueue>
 #include <cstdint>
 
-#ifndef Q_OS_MACOS
+#if defined(APEX_ENABLE_AASDK) && !defined(Q_OS_MACOS)
 #include <alsa/asoundlib.h>
+#define HAVE_ALSA 1
 #endif
 
 class AndroidAutoAudioSink : public QObject
@@ -40,7 +41,7 @@ private:
     QQueue<AudioPacket> m_queue;
     bool m_running = false;
 
-#ifndef Q_OS_MACOS
+#ifdef HAVE_ALSA
     snd_pcm_t *m_mediaHandle = nullptr;  // Channel 4: 48000 Hz, 2 ch
     snd_pcm_t *m_speechHandle = nullptr; // Channels 5 & 6: 16000 Hz, 1 ch
 

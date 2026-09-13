@@ -49,7 +49,7 @@ void AndroidAutoAudioSink::reset()
     QMutexLocker locker(&m_mutex);
     m_queue.clear();
 
-#ifndef Q_OS_MACOS
+#ifdef HAVE_ALSA
     closeDevice(&m_mediaHandle);
     closeDevice(&m_speechHandle);
 #endif
@@ -74,7 +74,7 @@ void AndroidAutoAudioSink::queueAudioPacket(uint8_t channel, const uint8_t *data
     m_cond.wakeOne();
 }
 
-#ifndef Q_OS_MACOS
+#ifdef HAVE_ALSA
 bool AndroidAutoAudioSink::openDevice(snd_pcm_t **handle, unsigned int rate, unsigned int channels, const char *streamName)
 {
     if (*handle) return true;
@@ -131,7 +131,7 @@ void AndroidAutoAudioSink::workerLoop()
             pkt = m_queue.dequeue();
         }
 
-#ifndef Q_OS_MACOS
+#ifdef HAVE_ALSA
         if (pkt.channel == 4) {
             // Media audio: 48000 Hz, 2 channels, S16_LE (4 bytes per frame)
             if (!m_mediaHandle) {
@@ -160,7 +160,7 @@ void AndroidAutoAudioSink::workerLoop()
 #endif
     }
 
-#ifndef Q_OS_MACOS
+#ifdef HAVE_ALSA
     closeDevice(&m_mediaHandle);
     closeDevice(&m_speechHandle);
 #endif
