@@ -8,11 +8,13 @@
 #include <QWaitCondition>
 #include <atomic>
 
+#ifdef APEX_ENABLE_AASDK
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/imgutils.h>
 #include <libswscale/swscale.h>
 }
+#endif
 
 class AndroidAutoH264Decoder : public QThread
 {
@@ -36,12 +38,14 @@ protected:
 private:
     bool decodePacketInternal(const uint8_t *data, int size);
 
+#ifdef APEX_ENABLE_AASDK
     const AVCodec *m_codec = nullptr;
     AVCodecContext *m_codecCtx = nullptr;
     AVCodecParserContext *m_parser = nullptr;
     AVFrame *m_frame = nullptr;
     AVPacket *m_packet = nullptr;
     SwsContext *m_swsCtx = nullptr;
+#endif
     int m_width = 1280;
     int m_height = 720;
     QRecursiveMutex m_codecMutex;

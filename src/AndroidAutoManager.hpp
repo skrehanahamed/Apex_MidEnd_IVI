@@ -18,7 +18,7 @@
 #include <atomic>
 #include "AndroidAutoSession.hpp"
 
-#ifdef __has_include
+#if defined(APEX_ENABLE_AASDK) && defined(__has_include)
 #if __has_include(<libusb-1.0/libusb.h>)
 #include <libusb-1.0/libusb.h>
 #define HAVE_LIBUSB 1

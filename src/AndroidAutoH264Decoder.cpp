@@ -37,6 +37,7 @@ void AndroidAutoH264Decoder::reset()
         m_packetQueue.clear();
     }
 
+#ifdef APEX_ENABLE_AASDK
     if (m_swsCtx) {
         sws_freeContext(m_swsCtx);
         m_swsCtx = nullptr;
@@ -60,6 +61,11 @@ void AndroidAutoH264Decoder::reset()
         avcodec_free_context(&m_codecCtx);
         m_codecCtx = nullptr;
     }
+#else
+    for (int i = 0; i < POOL_SIZE; ++i) {
+        m_imagePool[i] = QImage();
+    }
+#endif
 }
 
 bool AndroidAutoH264Decoder::init(int width, int height)
@@ -70,6 +76,7 @@ bool AndroidAutoH264Decoder::init(int width, int height)
     QMutexLocker locker(&m_codecMutex);
     m_initialized = false;
 
+#ifdef APEX_ENABLE_AASDK
     // 2. Clean up previous context safely
     if (m_swsCtx) {
         sws_freeContext(m_swsCtx);
@@ -155,6 +162,11 @@ bool AndroidAutoH264Decoder::init(int width, int height)
 
     qInfo() << "[AA H264] Initialized 4-thread low-latency decoder worker successfully at" << m_width << "x" << m_height;
     return true;
+#else
+    Q_UNUSED(width);
+    Q_UNUSED(height);
+    return false;
+#endif
 }
 
 void AndroidAutoH264Decoder::queuePacket(const QByteArray &packet)
@@ -200,6 +212,7 @@ bool AndroidAutoH264Decoder::decodePacket(const uint8_t *data, int size)
 
 bool AndroidAutoH264Decoder::decodePacketInternal(const uint8_t *data, int size)
 {
+#ifdef APEX_ENABLE_AASDK
     QMutexLocker locker(&m_codecMutex);
     if (!m_initialized || !data || size <= 0) {
         return false;
@@ -269,4 +282,9 @@ bool AndroidAutoH264Decoder::decodePacketInternal(const uint8_t *data, int size)
     }
 
     return true;
+#else
+    Q_UNUSED(data);
+    Q_UNUSED(size);
+    return false;
+#endif
 }
