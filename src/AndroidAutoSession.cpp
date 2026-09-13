@@ -1,4 +1,6 @@
 #include "AndroidAutoSession.hpp"
+
+#ifdef APEX_ENABLE_AASDK
 #include "AndroidAutoH264Decoder.hpp"
 #include "AndroidAutoAudioSink.hpp"
 
@@ -1304,4 +1306,53 @@ void AndroidAutoSession::requestVideoFocus(bool focused)
         m_priv->videoChannel->sendVideoFocusIndication(indication, std::move(promise));
     });
 }
+#else
+
+#include <QDebug>
+
+AndroidAutoSession::AndroidAutoSession(QObject *parent)
+    : QThread(parent)
+{
+}
+
+AndroidAutoSession::~AndroidAutoSession()
+{
+    stopSession();
+}
+
+bool AndroidAutoSession::startSession(void *usbDevicePtr, void *usbContext, const QString &btAddress)
+{
+    Q_UNUSED(usbDevicePtr);
+    Q_UNUSED(usbContext);
+    Q_UNUSED(btAddress);
+    qDebug() << "[AA Session] AASDK disabled in desktop/CI build - session stub active";
+    return false;
+}
+
+void AndroidAutoSession::stopSession()
+{
+    m_running.store(false);
+}
+
+void AndroidAutoSession::sendTouch(int action, int x, int y)
+{
+    Q_UNUSED(action);
+    Q_UNUSED(x);
+    Q_UNUSED(y);
+}
+
+void AndroidAutoSession::sendKeyEvent(uint32_t keyCode)
+{
+    Q_UNUSED(keyCode);
+}
+
+void AndroidAutoSession::requestVideoFocus(bool focused)
+{
+    Q_UNUSED(focused);
+}
+
+void AndroidAutoSession::run()
+{
+}
+#endif
 

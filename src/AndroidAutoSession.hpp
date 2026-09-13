@@ -14,6 +14,7 @@ class AndroidAutoAudioSink;
 struct libusb_context;
 struct libusb_device;
 
+#ifdef APEX_ENABLE_AASDK
 #include <boost/asio/io_service.hpp>
 
 namespace f1x {
@@ -69,6 +70,7 @@ class IBluetoothServiceChannelEventHandler;
 }
 }
 }
+#endif
 
 class AndroidAutoSession : public QThread
 {
@@ -97,6 +99,7 @@ protected:
     void run() override;
 
 private:
+#ifdef APEX_ENABLE_AASDK
     friend class ControlEventHandler;
     friend class VideoEventHandler;
     friend class InputEventHandler;
@@ -111,6 +114,7 @@ private:
     void handleHandshakePayload(const f1x::aasdk::common::DataConstBuffer &payload);
     void schedulePing();
     void armServiceChannels();
+#endif
 
     void *m_devicePtr{nullptr};
     libusb_context *m_usbCtx{nullptr};
@@ -131,9 +135,11 @@ private:
     AndroidAutoH264Decoder *m_decoder{nullptr};
     AndroidAutoAudioSink *m_audioSink{nullptr};
 
+#ifdef APEX_ENABLE_AASDK
     std::unique_ptr<boost::asio::io_service> m_ioService;
     struct PrivateMembers;
     std::unique_ptr<PrivateMembers> m_priv;
+#endif
 
     std::thread m_usbEventThread;
 };
