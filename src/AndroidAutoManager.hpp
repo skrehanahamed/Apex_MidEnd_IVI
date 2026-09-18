@@ -32,6 +32,7 @@ class AndroidAutoManager : public QObject {
 
     Q_PROPERTY(bool phoneAttached READ isPhoneAttached NOTIFY phoneAttachedChanged)
     Q_PROPERTY(bool accessoryConnected READ isAccessoryConnected NOTIFY accessoryConnectedChanged)
+    Q_PROPERTY(bool mediaPlaying READ isMediaPlaying NOTIFY mediaPlaybackStateChanged)
     Q_PROPERTY(QString deviceName READ deviceName NOTIFY deviceNameChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(int aoaVersion READ aoaVersion NOTIFY aoaVersionChanged)
@@ -42,6 +43,7 @@ public:
 
     bool isPhoneAttached() const;
     bool isAccessoryConnected() const;
+    bool isMediaPlaying() const { return m_mediaPlaying; }
     QString deviceName() const;
     QString statusMessage() const;
     int aoaVersion() const;
@@ -59,6 +61,7 @@ public:
 signals:
     void phoneAttachedChanged(bool attached);
     void accessoryConnectedChanged(bool connected);
+    void mediaPlaybackStateChanged(bool playing);
     void deviceNameChanged(const QString &name);
     void statusMessageChanged(const QString &status);
     void aoaVersionChanged(int version);
@@ -77,6 +80,7 @@ private:
 
     bool m_phoneAttached{false};
     bool m_accessoryConnected{false};
+    bool m_mediaPlaying{false};
     QString m_deviceName;
     QString m_statusMessage{"Waiting for USB connection..."};
     int m_aoaVersion{0};
@@ -111,6 +115,7 @@ signals:
     void frameReady(const QImage &frame);
     void exitRequested();
     void audioFocusGained();
+    void mediaPlaybackStateChanged(bool playing);
 
 private slots:
     void scanDevices();

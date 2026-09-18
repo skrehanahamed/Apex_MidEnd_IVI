@@ -538,6 +538,20 @@ SystemController::SystemController(QObject *parent)
                 qDebug() << "[Apex IVI] Android Auto disconnected -> Returning to home screen";
                 setCurrentScreen("home");
             }
+            if (m_selectedMediaSource == "android_auto") {
+                m_selectedMediaSource = "none";
+                emit selectedMediaSourceChanged();
+            }
+            if (m_androidAutoMediaPlaying) {
+                m_androidAutoMediaPlaying = false;
+                emit androidAutoMediaPlayingChanged();
+            }
+            // Auto-reconnect phone Bluetooth A2DP & AVRCP audio profiles!
+            QString mac = primaryConnectedPhoneMac();
+            if (!mac.isEmpty() && m_bluezManager) {
+                qInfo() << "[Apex IVI] Android Auto disconnected -> Reconnecting Bluetooth audio profiles for" << mac;
+                m_bluezManager->connectAudioProfiles(mac);
+            }
         }
     });
     connect(m_androidAutoManager, &AndroidAutoManager::deviceNameChanged, this, &SystemController::androidAutoDeviceNameChanged);
@@ -554,6 +568,19 @@ SystemController::SystemController(QObject *parent)
         bluetoothMediaPause();
         m_selectedMediaSource = "android_auto";
         emit selectedMediaSourceChanged();
+    });
+    connect(m_androidAutoManager, &AndroidAutoManager::mediaPlaybackStateChanged, this, [this](bool playing) {
+        if (m_androidAutoMediaPlaying != playing) {
+            m_androidAutoMediaPlaying = playing;
+            emit androidAutoMediaPlayingChanged();
+        }
+        if (playing && m_selectedMediaSource != "android_auto") {
+            qInfo() << "[Apex IVI Audio Priority] Android Auto media playback active -> Selecting android_auto";
+            pauseRadio();
+            bluetoothMediaPause();
+            m_selectedMediaSource = "android_auto";
+            emit selectedMediaSourceChanged();
+        }
     });
 
     // Start Dedicated Worker Thread for Live Radio Streaming to guarantee 60 FPS GUI
@@ -1401,6 +1428,21 @@ void SystemController::selectMediaSource(const QString &source)
             qDebug() << "[Apex IVI Audio Priority] Bluetooth selected -> Turning off FM/AM Radio";
             stopRadio();
         }
+        // Force audio profile connection for the connected phone
+        QString mac = primaryConnectedPhoneMac();
+        if (mac.isEmpty() && !m_bluetoothDeviceList.isEmpty()) {
+            for (const auto &item : m_bluetoothDeviceList) {
+                auto map = item.toMap();
+                if (map.value("connected").toBool() && !map.value("isInput").toBool()) {
+                    mac = map.value("mac").toString();
+                    break;
+                }
+            }
+        }
+        if (!mac.isEmpty() && m_bluezManager) {
+            m_bluezManager->connectAudioProfiles(mac);
+        }
+
         if (m_bluetoothConnected) {
             qDebug() << "[Apex IVI Media] Bluetooth Audio active";
             bluetoothMediaPlay();
@@ -3315,6 +3357,18 @@ QString SystemController::resolveBluetoothPlayerPath() const
         }
     }
 
+    // If no player could be resolved and device is connected, trigger audio profiles connection!
+    static qint64 lastAudioProfileConnectMs = 0;
+    qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - lastAudioProfileConnectMs > 3000) {
+        lastAudioProfileConnectMs = nowMs;
+        QString rawMac = devPath.section("dev_", 1).replace('_', ':');
+        if (m_bluezManager) {
+            qInfo() << "[Apex IVI] No active Bluetooth player found -> Requesting A2DP/AVRCP connection for" << rawMac;
+            m_bluezManager->connectAudioProfiles(rawMac);
+        }
+    }
+
     if (!m_cachedPlayerPath.isEmpty()) return m_cachedPlayerPath;
     return QString("%1/player0").arg(devPath);
 }
@@ -3324,6 +3378,10 @@ void SystemController::setBluetoothMediaPlayback(bool play)
     const QString playerPath = resolveBluetoothPlayerPath();
     if (playerPath.isEmpty()) {
         qWarning() << "[Apex IVI] Cannot" << (play ? "Play" : "Pause") << "- no Bluetooth player path resolved!";
+        QString mac = primaryConnectedPhoneMac();
+        if (!mac.isEmpty() && m_bluezManager) {
+            m_bluezManager->connectAudioProfiles(mac);
+        }
         return;
     }
     qDebug() << "[Apex IVI] Sending" << (play ? "Play" : "Pause") << "to" << playerPath;
@@ -4910,4 +4968,39 @@ void SystemController::openAndroidAuto(const QString &mode)
             }
         });
     }
+}
+
+void SystemController::androidAutoMediaPlay()
+{
+    qInfo() << "[Apex IVI] Dispatching Android Auto PLAY (KEYCODE_MEDIA_PLAY 126)";
+    sendAndroidAutoKey(126);
+    setBluetoothMediaPlayback(true);
+}
+
+void SystemController::androidAutoMediaPause()
+{
+    qInfo() << "[Apex IVI] Dispatching Android Auto PAUSE (KEYCODE_MEDIA_PAUSE 127)";
+    sendAndroidAutoKey(127);
+    setBluetoothMediaPlayback(false);
+}
+
+void SystemController::androidAutoMediaPlayPause()
+{
+    if (m_androidAutoMediaPlaying || m_bluetoothPlaybackStatus == "playing") {
+        androidAutoMediaPause();
+    } else {
+        androidAutoMediaPlay();
+    }
+}
+
+void SystemController::androidAutoMediaNext()
+{
+    qInfo() << "[Apex IVI] Dispatching Android Auto NEXT (KEYCODE_MEDIA_NEXT 87)";
+    sendAndroidAutoKey(87);
+}
+
+void SystemController::androidAutoMediaPrevious()
+{
+    qInfo() << "[Apex IVI] Dispatching Android Auto PREVIOUS (KEYCODE_MEDIA_PREVIOUS 88)";
+    sendAndroidAutoKey(88);
 }

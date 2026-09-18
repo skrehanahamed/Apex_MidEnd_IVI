@@ -44,6 +44,6 @@ private:
     QMutex m_imageMutex;
     bool m_hasVideo = false;
     bool m_imageDirty = false;
-    int m_videoWidth = 1280;
-    int m_videoHeight = 720;
+    int m_videoWidth = 1920;
+    int m_videoHeight = 1080;
 };

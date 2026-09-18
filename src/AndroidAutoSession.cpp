@@ -217,26 +217,44 @@ public:
         sensorChannel->add_sensors()->set_type(f1x::aasdk::proto::enums::SensorType::DRIVING_STATUS);
         sensorChannel->add_sensors()->set_type(f1x::aasdk::proto::enums::SensorType::NIGHT_DATA);
 
-        // Channel 3: Video Channel (720p 60/30 FPS)
+        // Channel 3: Video Channel (Native 1080p Full HD with 720p fallback)
         auto *chVideo = response.add_channels();
         chVideo->set_channel_id(3);
         auto *videoAv = chVideo->mutable_av_channel();
         videoAv->set_stream_type(f1x::aasdk::proto::enums::AVStreamType::VIDEO);
         videoAv->set_available_while_in_call(true);
 
-        auto *vidCfg60 = videoAv->add_video_configs();
-        vidCfg60->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_720p);
-        vidCfg60->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_60);
-        vidCfg60->set_margin_width(0);
-        vidCfg60->set_margin_height(0);
-        vidCfg60->set_dpi(140);
+        // Config 0: 1080p 60 FPS (Native Full HD, 200 DPI for sharp vector maps & text)
+        auto *vidCfg1080_60 = videoAv->add_video_configs();
+        vidCfg1080_60->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_1080p);
+        vidCfg1080_60->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_60);
+        vidCfg1080_60->set_margin_width(0);
+        vidCfg1080_60->set_margin_height(0);
+        vidCfg1080_60->set_dpi(200);
 
-        auto *vidCfg30 = videoAv->add_video_configs();
-        vidCfg30->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_720p);
-        vidCfg30->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_30);
-        vidCfg30->set_margin_width(0);
-        vidCfg30->set_margin_height(0);
-        vidCfg30->set_dpi(140);
+        // Config 1: 1080p 30 FPS
+        auto *vidCfg1080_30 = videoAv->add_video_configs();
+        vidCfg1080_30->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_1080p);
+        vidCfg1080_30->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_30);
+        vidCfg1080_30->set_margin_width(0);
+        vidCfg1080_30->set_margin_height(0);
+        vidCfg1080_30->set_dpi(200);
+
+        // Config 2: 720p 60 FPS (Standard fallback for phones defaulting to 720p)
+        auto *vidCfg720_60 = videoAv->add_video_configs();
+        vidCfg720_60->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_720p);
+        vidCfg720_60->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_60);
+        vidCfg720_60->set_margin_width(0);
+        vidCfg720_60->set_margin_height(0);
+        vidCfg720_60->set_dpi(160);
+
+        // Config 3: 720p 30 FPS
+        auto *vidCfg720_30 = videoAv->add_video_configs();
+        vidCfg720_30->set_video_resolution(f1x::aasdk::proto::enums::VideoResolution::_720p);
+        vidCfg720_30->set_video_fps(f1x::aasdk::proto::enums::VideoFPS::_30);
+        vidCfg720_30->set_margin_width(0);
+        vidCfg720_30->set_margin_height(0);
+        vidCfg720_30->set_dpi(160);
 
         // Channel 8: Bluetooth Channel (Real BlueZ adapter address)
         auto *chBt = response.add_channels();
@@ -269,16 +287,16 @@ public:
         m_session->m_touchWidth = 1280;
         m_session->m_touchHeight = 720;
 
-        // Headunit Metadata
-        response.set_head_unit_name("APEX");
+        // Headunit Metadata (Refreshed profile forces phone cache invalidation)
+        response.set_head_unit_name("APEX IVI");
         response.set_car_model("Apex Horizon");
         response.set_car_year("2026");
-        response.set_car_serial("APEX-2026-RPI5");
-        response.set_left_hand_drive_vehicle(true);
+        response.set_car_serial("APEX-2026-FHD-v2");
+        response.set_left_hand_drive_vehicle(false); // RHD for proper driver positioning in India
         response.set_headunit_manufacturer("APEX");
-        response.set_headunit_model("Apex IVI");
-        response.set_sw_build("1");
-        response.set_sw_version("1.0");
+        response.set_headunit_model("Apex IVI FHD");
+        response.set_sw_build("2");
+        response.set_sw_version("2.0");
         response.set_can_play_native_media_during_vr(false);
         response.set_hide_clock(false);
 
@@ -390,12 +408,38 @@ public:
     }
 
     void onAVChannelSetupRequest(const f1x::aasdk::proto::messages::AVChannelSetupRequest& request) override {
-        Q_UNUSED(request);
-        qInfo() << "[AA Session] Video AVChannelSetupRequest received";
+        uint32_t chosenConfig = request.config_index();
+        qInfo() << "[AA Session] Video AVChannelSetupRequest received, requested config index:" << chosenConfig;
+
+        // Guard against any out-of-range index (we offer configs 0..3)
+        if (chosenConfig > 3) {
+            qWarning() << "[AA Session] Requested config index" << chosenConfig << "out of bounds, defaulting to 0";
+            chosenConfig = 0;
+        }
+
         f1x::aasdk::proto::messages::AVChannelSetupResponse resp;
         resp.set_media_status(f1x::aasdk::proto::enums::AVChannelSetupStatus::OK);
         resp.set_max_unacked(1); // Aligned with OpenAuto AASDK reference
-        resp.add_configs(0);
+        resp.add_configs(chosenConfig);
+
+        if (chosenConfig < 2) {
+            m_session->m_videoWidth = 1920;
+            m_session->m_videoHeight = 1080;
+            m_session->m_touchWidth = 1280;
+            m_session->m_touchHeight = 720;
+            qInfo() << "[AA Session] Negotiated 1080p Full HD resolution ( 1920 x 1080 )";
+        } else {
+            m_session->m_videoWidth = 1280;
+            m_session->m_videoHeight = 720;
+            m_session->m_touchWidth = 1280;
+            m_session->m_touchHeight = 720;
+            qInfo() << "[AA Session] Negotiated 720p HD fallback resolution ( 1280 x 720 )";
+        }
+
+        if (m_session->m_decoder) {
+            m_session->m_decoder->init(m_session->m_videoWidth, m_session->m_videoHeight);
+        }
+
         auto promise = f1x::aasdk::channel::SendPromise::defer(*m_session->m_priv->strand);
         m_session->m_priv->videoChannel->sendAVChannelSetupResponse(resp, std::move(promise));
 
@@ -582,6 +626,7 @@ public:
         if (m_channelId == 4) {
             m_session->m_mediaAudioActive.store(true);
             emit m_session->audioFocusGained();
+            emit m_session->mediaPlaybackStateChanged(true);
         }
         m_channel->receive(shared_from_this());
     }
@@ -591,6 +636,7 @@ public:
         qInfo() << "[AA Session] Audio AVChannelStopIndication on channel:" << m_channelId;
         if (m_channelId == 4) {
             m_session->m_mediaAudioActive.store(false);
+            emit m_session->mediaPlaybackStateChanged(false);
         }
         m_channel->receive(shared_from_this());
     }
@@ -600,6 +646,7 @@ public:
             if (!m_session->m_mediaAudioActive.exchange(true)) {
                 qInfo() << "[AA Session] Media Audio stream active on Channel 4 -> Emitting audioFocusGained";
                 emit m_session->audioFocusGained();
+                emit m_session->mediaPlaybackStateChanged(true);
             }
         }
         if (m_session->m_audioSink && buffer.size > 0) {
@@ -620,6 +667,7 @@ public:
             if (!m_session->m_mediaAudioActive.exchange(true)) {
                 qInfo() << "[AA Session] Media Audio stream active on Channel 4 -> Emitting audioFocusGained";
                 emit m_session->audioFocusGained();
+                emit m_session->mediaPlaybackStateChanged(true);
             }
         }
         if (m_session->m_audioSink && buffer.size > 0) {
@@ -875,7 +923,7 @@ bool AndroidAutoSession::startSession(void *usbDevicePtr, void *usbContext, cons
     if (!m_decoder) {
         m_decoder = new AndroidAutoH264Decoder(this);
         connect(m_decoder, &AndroidAutoH264Decoder::frameReady, this, &AndroidAutoSession::frameReady);
-        m_decoder->init(1280, 720);
+        m_decoder->init(1920, 1080);
     }
 
     if (!m_audioSink) {
@@ -1070,6 +1118,7 @@ void AndroidAutoSession::cleanupSession()
 
     m_running.store(false);
     m_mediaAudioActive.store(false);
+    emit mediaPlaybackStateChanged(false);
 
     qInfo() << "[AA Session] Executing unified session cleanup...";
 

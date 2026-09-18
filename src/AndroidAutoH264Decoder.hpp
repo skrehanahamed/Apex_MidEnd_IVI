@@ -23,7 +23,7 @@ public:
     explicit AndroidAutoH264Decoder(QObject *parent = nullptr);
     ~AndroidAutoH264Decoder() override;
 
-    bool init(int width = 1280, int height = 720);
+    bool init(int width = 1920, int height = 1080);
     void reset();
     void stopDecoder();
     void queuePacket(const QByteArray &packet);
@@ -46,8 +46,8 @@ private:
     AVPacket *m_packet = nullptr;
     SwsContext *m_swsCtx = nullptr;
 #endif
-    int m_width = 1280;
-    int m_height = 720;
+    int m_width = 1920;
+    int m_height = 1080;
     QRecursiveMutex m_codecMutex;
     bool m_initialized = false;
 

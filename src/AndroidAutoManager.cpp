@@ -37,6 +37,13 @@ AndroidAutoManager::AndroidAutoManager(QObject *parent)
             this, &AndroidAutoManager::exitRequested);
     connect(m_worker, &AndroidAutoWorker::audioFocusGained,
             this, &AndroidAutoManager::audioFocusGained);
+    connect(m_worker, &AndroidAutoWorker::mediaPlaybackStateChanged,
+            this, [this](bool playing) {
+                if (m_mediaPlaying != playing) {
+                    m_mediaPlaying = playing;
+                    emit mediaPlaybackStateChanged(playing);
+                }
+            });
 
     m_workerThread->start();
 }
@@ -481,12 +488,14 @@ void AndroidAutoWorker::scanDevices()
                 connect(m_session, &AndroidAutoSession::frameReady, this, &AndroidAutoWorker::frameReady);
                 connect(m_session, &AndroidAutoSession::exitRequested, this, &AndroidAutoWorker::exitRequested);
                 connect(m_session, &AndroidAutoSession::audioFocusGained, this, &AndroidAutoWorker::audioFocusGained);
+                connect(m_session, &AndroidAutoSession::mediaPlaybackStateChanged, this, &AndroidAutoWorker::mediaPlaybackStateChanged);
                 connect(m_session, &AndroidAutoSession::statusChanged, this, [this](const QString &st) {
                     emit statusUpdated(true, true, m_lastDeviceName, st, 2);
                 });
                 connect(m_session, &AndroidAutoSession::sessionStopped, this, [this]() {
                     qWarning() << "[AndroidAutoWorker] Session stopped -> cooldown 2s before auto-restart";
                     m_sessionInCooldown = true;
+                    emit mediaPlaybackStateChanged(false);
 
                     // One-shot 2s timer: clears cooldown so the next scan cycle can reconnect
                     if (!m_restartCooldownTimer) {

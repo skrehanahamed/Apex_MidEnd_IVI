@@ -62,8 +62,8 @@ void AndroidAutoAudioSink::queueAudioPacket(uint8_t channel, const uint8_t *data
     QMutexLocker locker(&m_mutex);
     if (!m_running) return;
 
-    // Bound queue size to ~250ms of audio to prevent latency buildup
-    if (m_queue.size() > 40) {
+    // Bound queue size to ~1.5s of audio to prevent latency buildup while absorbing jitter
+    if (m_queue.size() > 150) {
         m_queue.dequeue();
     }
 
@@ -89,13 +89,14 @@ bool AndroidAutoAudioSink::openDevice(snd_pcm_t **handle, unsigned int rate, uns
         }
     }
 
+    // 250ms buffer latency to match PipeWire ivi_hdmi_sink (12 periods x 1024 frames)
     err = snd_pcm_set_params(*handle,
                              SND_PCM_FORMAT_S16_LE,
                              SND_PCM_ACCESS_RW_INTERLEAVED,
                              channels,
                              rate,
                              1, /* soft_resample */
-                             50000 /* 50ms buffer latency */);
+                             250000 /* 250ms buffer latency */);
     if (err < 0) {
         qWarning() << "[AA Audio] Failed to set ALSA parameters for" << streamName << ":" << snd_strerror(err);
         snd_pcm_close(*handle);
@@ -104,7 +105,7 @@ bool AndroidAutoAudioSink::openDevice(snd_pcm_t **handle, unsigned int rate, uns
     }
 
     qInfo() << "[AA Audio] Successfully opened ALSA PipeWire playback for" << streamName
-            << "at" << rate << "Hz," << channels << "ch";
+            << "at" << rate << "Hz," << channels << "ch with 250ms buffer";
     return true;
 }
 
@@ -138,10 +139,20 @@ void AndroidAutoAudioSink::workerLoop()
                 openDevice(&m_mediaHandle, 48000, 2, "Media");
             }
             if (m_mediaHandle) {
-                snd_pcm_uframes_t frames = pkt.data.size() / 4;
-                snd_pcm_sframes_t written = snd_pcm_writei(m_mediaHandle, pkt.data.constData(), frames);
-                if (written < 0) {
-                    snd_pcm_recover(m_mediaHandle, written, 0);
+                const char *ptr = pkt.data.constData();
+                snd_pcm_uframes_t framesLeft = pkt.data.size() / 4;
+                while (framesLeft > 0 && m_running) {
+                    snd_pcm_sframes_t written = snd_pcm_writei(m_mediaHandle, ptr, framesLeft);
+                    if (written < 0) {
+                        int r = snd_pcm_recover(m_mediaHandle, written, 0);
+                        if (r < 0) {
+                            qWarning() << "[AA Audio] Media recover failed:" << snd_strerror(r);
+                            break;
+                        }
+                        continue;
+                    }
+                    ptr += written * 4;
+                    framesLeft -= written;
                 }
             }
         } else if (pkt.channel == 5 || pkt.channel == 6) {
@@ -150,10 +161,20 @@ void AndroidAutoAudioSink::workerLoop()
                 openDevice(&m_speechHandle, 16000, 1, (pkt.channel == 5 ? "Speech" : "System"));
             }
             if (m_speechHandle) {
-                snd_pcm_uframes_t frames = pkt.data.size() / 2;
-                snd_pcm_sframes_t written = snd_pcm_writei(m_speechHandle, pkt.data.constData(), frames);
-                if (written < 0) {
-                    snd_pcm_recover(m_speechHandle, written, 0);
+                const char *ptr = pkt.data.constData();
+                snd_pcm_uframes_t framesLeft = pkt.data.size() / 2;
+                while (framesLeft > 0 && m_running) {
+                    snd_pcm_sframes_t written = snd_pcm_writei(m_speechHandle, ptr, framesLeft);
+                    if (written < 0) {
+                        int r = snd_pcm_recover(m_speechHandle, written, 0);
+                        if (r < 0) {
+                            qWarning() << "[AA Audio] Speech recover failed:" << snd_strerror(r);
+                            break;
+                        }
+                        continue;
+                    }
+                    ptr += written * 2;
+                    framesLeft -= written;
                 }
             }
         }

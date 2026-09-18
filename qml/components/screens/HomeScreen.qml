@@ -106,6 +106,8 @@ Item {
                 onRadioClicked: {
                     if (systemController.selectedMediaSource === "bluetooth") {
                         systemController.navigateTo("bluetooth_audio")
+                    } else if (systemController.selectedMediaSource === "android_auto") {
+                        systemController.navigateTo("android_auto")
                     } else {
                         root.radioClicked()
                     }
@@ -316,6 +318,8 @@ Item {
                 onRadioClicked: {
                     if (systemController.selectedMediaSource === "bluetooth") {
                         systemController.navigateTo("bluetooth_audio")
+                    } else if (systemController.selectedMediaSource === "android_auto") {
+                        systemController.navigateTo("android_auto")
                     } else {
                         root.radioClicked()
                     }
@@ -944,7 +948,311 @@ Item {
             }
         }
 
-        // 3. When Media is off (no media source)
+        // 3. When Media is Android Auto
+        Item {
+            anchors.fill: parent
+            visible: (systemController.selectedMediaSource === "android_auto")
+
+            // Top: "Android Auto" + Logo
+            Row {
+                id: aaTitleRow
+                anchors.top: parent.top
+                anchors.topMargin: 36
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: 12
+
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 28
+                    height: 28
+                    source: "qrc:/assets/media/icon_media_androidauto.png"
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Android Auto"
+                    color: "#38B6FF"
+                    font.pixelSize: 24
+                    font.weight: Font.Bold
+                    font.family: "Roboto"
+                }
+            }
+
+            // Hairline separator
+            Rectangle {
+                id: aaDividerLine
+                anchors.top: aaTitleRow.bottom
+                anchors.topMargin: 16
+                anchors.left: parent.left
+                anchors.leftMargin: 28
+                anchors.right: parent.right
+                anchors.rightMargin: 28
+                height: 1
+                color: "#1E2A38"
+            }
+
+            // Middle: Giant Track Title + Artist Info (Centered like Bluetooth/FM part)
+            Column {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: aaDividerLine.bottom
+                anchors.bottom: aaMediaControlsRow.top
+                anchors.topMargin: 24
+                width: parent.width - 48
+                spacing: 10
+
+                // Large prominent Track Title with auto-scrolling marquee when text overflows
+                Item {
+                    id: aaTitleContainer
+                    width: parent.width
+                    height: aaTitleText.paintedHeight > 0 ? aaTitleText.paintedHeight : 54
+                    clip: true
+
+                    property bool overflows: aaTitleText.paintedWidth > width
+                    property real scrollDistance: overflows ? (aaTitleText.paintedWidth - width + 24) : 0
+
+                    Text {
+                        id: aaTitleText
+                        text: (systemController.bluetoothTrackTitle.length > 0)
+                              ? systemController.bluetoothTrackTitle
+                              : (systemController.bluetoothPlayerName.length > 0
+                                    ? systemController.bluetoothPlayerName
+                                    : (systemController.androidAutoMediaPlaying ? "Media Playing" : "Android Auto Audio"))
+                        color: "#FFFFFF"
+                        font.pixelSize: 44
+                        font.weight: Font.Bold
+                        font.family: "Roboto"
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: aaTitleContainer.overflows ? undefined : parent.horizontalCenter
+                        x: 0
+
+                        SequentialAnimation on x {
+                            running: aaTitleContainer.overflows
+                            loops: Animation.Infinite
+                            alwaysRunToEnd: false
+
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: -aaTitleContainer.scrollDistance
+                                duration: Math.max(2500, aaTitleContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: 0
+                                duration: Math.max(2500, aaTitleContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                        }
+
+                        onTextChanged: {
+                            x = 0
+                        }
+                    }
+                }
+
+                // Station RDS / Artist name with auto-scrolling marquee when text overflows
+                Item {
+                    id: aaArtistContainer
+                    width: parent.width
+                    height: aaArtistText.paintedHeight > 0 ? aaArtistText.paintedHeight : 32
+                    clip: true
+
+                    property bool overflows: aaArtistText.paintedWidth > width
+                    property real scrollDistance: overflows ? (aaArtistText.paintedWidth - width + 24) : 0
+
+                    Text {
+                        id: aaArtistText
+                        text: (systemController.bluetoothTrackArtist.length > 0)
+                              ? systemController.bluetoothTrackArtist
+                              : ((systemController.bluetoothConnectedDeviceName && systemController.bluetoothConnectedDeviceName.length > 0)
+                                    ? systemController.bluetoothConnectedDeviceName
+                                    : (systemController.androidAutoDeviceName && systemController.androidAutoDeviceName.length > 0
+                                          ? systemController.androidAutoDeviceName
+                                          : "Connected via USB"))
+                        color: "#DCE7F5"
+                        font.pixelSize: 25
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: aaArtistContainer.overflows ? undefined : parent.horizontalCenter
+                        x: 0
+
+                        SequentialAnimation on x {
+                            running: aaArtistContainer.overflows
+                            loops: Animation.Infinite
+                            alwaysRunToEnd: false
+
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: -aaArtistContainer.scrollDistance
+                                duration: Math.max(2500, aaArtistContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                            PauseAnimation { duration: 2000 }
+                            NumberAnimation {
+                                to: 0
+                                duration: Math.max(2500, aaArtistContainer.scrollDistance * 25)
+                                easing.type: Easing.InOutQuad
+                            }
+                        }
+
+                        onTextChanged: {
+                            x = 0
+                        }
+                    }
+                }
+            }
+
+            // 3 Playback Control Buttons: [ |◀◀ ]   [ ▶ / ❚❚ ]   [ ▶▶| ]
+            Row {
+                id: aaMediaControlsRow
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: aaMediaProgressBarItem.top
+                anchors.bottomMargin: 20
+                spacing: 36
+                z: 20
+
+                // 1. Previous Track [ |◀◀ ]
+                Rectangle {
+                    width: 48
+                    height: 48
+                    radius: 24
+                    color: aaPrevTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "|◀◀"
+                        color: aaPrevTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
+                        font.pixelSize: 24
+                        scale: aaPrevTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: aaPrevTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.androidAutoMediaPrevious()
+                    }
+                }
+
+                // 2. Play / Pause [ ▶ / ❚❚ ]
+                Rectangle {
+                    width: 52
+                    height: 52
+                    radius: 26
+                    color: aaPlayTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: (systemController.androidAutoMediaPlaying || systemController.bluetoothPlaybackStatus === "playing") ? "❚❚" : "▶"
+                        color: aaPlayTrackMouse.pressed ? "#70D6FF" : "#FFFFFF"
+                        font.pixelSize: 28
+                        scale: aaPlayTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: aaPlayTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.androidAutoMediaPlayPause()
+                    }
+                }
+
+                // 3. Next Track [ ▶▶| ]
+                Rectangle {
+                    width: 48
+                    height: 48
+                    radius: 24
+                    color: aaNextTrackMouse.pressed ? "#1E334D" : "transparent"
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "▶▶|"
+                        color: aaNextTrackMouse.pressed ? "#70D6FF" : "#CBD5E1"
+                        font.pixelSize: 24
+                        scale: aaNextTrackMouse.pressed ? 0.9 : 1.0
+                    }
+
+                    MouseArea {
+                        id: aaNextTrackMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        preventStealing: true
+                        onClicked: systemController.androidAutoMediaNext()
+                    }
+                }
+            }
+
+            // Live Progress Bar
+            Item {
+                id: aaMediaProgressBarItem
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 16
+                anchors.leftMargin: 24
+                anchors.rightMargin: 24
+                height: 24
+
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 12
+
+                    Text {
+                        text: (systemController.bluetoothTrackPositionStr.length > 0 && systemController.bluetoothTrackPositionStr !== "0:00")
+                              ? systemController.bluetoothTrackPositionStr
+                              : (systemController.androidAutoMediaPlaying ? "PLAYING" : "PAUSED")
+                        color: "#BAC7D5"
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
+
+                    Item {
+                        Layout.fillWidth: true
+                        height: 6
+
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: 3
+                            color: "#162232"
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                width: (systemController.bluetoothTrackDurationMs > 0)
+                                       ? Math.max(0, Math.min(parent.width, parent.width * (systemController.bluetoothTrackPositionMs / Math.max(1, systemController.bluetoothTrackDurationMs))))
+                                       : (systemController.androidAutoMediaPlaying ? parent.width : 0)
+                                radius: 3
+                                color: "#00D26A"
+                                Behavior on width { NumberAnimation { duration: 250 } }
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: (systemController.bluetoothTrackDurationStr.length > 0 && systemController.bluetoothTrackDurationStr !== "0:00")
+                              ? systemController.bluetoothTrackDurationStr
+                              : "USB AUDIO"
+                        color: "#BAC7D5"
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                        font.family: "Roboto"
+                    }
+                }
+            }
+        }
+
+        // 4. When Media is off (no media source)
         Column {
             anchors.centerIn: parent
             spacing: 12
@@ -1004,14 +1312,31 @@ Item {
                         mipmap: true
                     }
 
-                    Text {
+                    Column {
                         anchors.verticalCenter: parent.verticalCenter
-                        text: "Android\nAuto"
-                        color: "#FFFFFF"
-                        font.pixelSize: 36
-                        font.weight: Font.DemiBold
-                        font.family: "Roboto"
-                        lineHeight: 1.12
+                        spacing: 4
+
+                        Text {
+                            text: (systemController.androidAutoMediaPlaying || (systemController.selectedMediaSource === "android_auto" && systemController.bluetoothTrackTitle.length > 0))
+                                  ? "Android Auto"
+                                  : "Android\nAuto"
+                            color: "#FFFFFF"
+                            font.pixelSize: (systemController.androidAutoMediaPlaying || (systemController.selectedMediaSource === "android_auto" && systemController.bluetoothTrackTitle.length > 0)) ? 32 : 36
+                            font.weight: Font.DemiBold
+                            font.family: "Roboto"
+                            lineHeight: 1.12
+                        }
+
+                        Text {
+                            visible: (systemController.androidAutoMediaPlaying || (systemController.selectedMediaSource === "android_auto" && systemController.bluetoothTrackTitle.length > 0))
+                            text: systemController.bluetoothTrackTitle.length > 0 ? ("▶ " + systemController.bluetoothTrackTitle) : "▶ Playing Audio"
+                            color: "#38B6FF"
+                            font.pixelSize: 22
+                            font.weight: Font.Medium
+                            font.family: "Roboto"
+                            elide: Text.ElideRight
+                            width: 260
+                        }
                     }
                 }
 

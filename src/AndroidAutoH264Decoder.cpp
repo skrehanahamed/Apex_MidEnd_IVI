@@ -152,7 +152,7 @@ bool AndroidAutoH264Decoder::init(int width, int height)
 
     m_swsCtx = sws_getContext(m_width, m_height, AV_PIX_FMT_YUV420P,
                               m_width, m_height, AV_PIX_FMT_RGBA,
-                              SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                              SWS_BICUBIC, nullptr, nullptr, nullptr);
 
     m_initialized = true;
     m_running = true;
@@ -259,7 +259,7 @@ bool AndroidAutoH264Decoder::decodePacketInternal(const uint8_t *data, int size)
                 if (m_swsCtx) sws_freeContext(m_swsCtx);
                 m_swsCtx = sws_getContext(m_width, m_height, (AVPixelFormat)m_frame->format,
                                           m_width, m_height, AV_PIX_FMT_RGBA,
-                                          SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                                          SWS_BICUBIC, nullptr, nullptr, nullptr);
                 for (int i = 0; i < POOL_SIZE; ++i) {
                     m_imagePool[i] = QImage(m_width, m_height, QImage::Format_RGBA8888);
                 }

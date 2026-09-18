@@ -89,6 +89,7 @@ public:
     // Device Actions (Requirement 5, 6, 7)
     void pairDevice(const QString &mac);
     void connectDevice(const QString &mac);
+    void connectAudioProfiles(const QString &mac);
     void disconnectDevice(const QString &mac);
     void removeDevice(const QString &mac);
 

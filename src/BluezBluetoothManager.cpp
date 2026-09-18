@@ -434,6 +434,20 @@ void BluezBluetoothManager::pairDevice(const QString &mac)
     }
 }
 
+void BluezBluetoothManager::connectAudioProfiles(const QString &mac)
+{
+    if (mac.isEmpty() || isInputDevice(mac)) return;
+    QString path = objectPathFromMac(mac);
+    QDBusInterface device(BLUEZ_SERVICE, path, DEVICE_INTERFACE, QDBusConnection::systemBus());
+    if (device.isValid()) {
+        qDebug() << "[BluezManager] Ensuring A2DP Audio Source & AVRCP profiles connected for" << mac;
+        // Audio Source UUID (0000110a: phone streaming music to car sink)
+        device.asyncCall("ConnectProfile", "0000110a-0000-1000-8000-00805f9b34fb");
+        // AVRCP Controller UUID (0000110e: playback control & track metadata)
+        device.asyncCall("ConnectProfile", "0000110e-0000-1000-8000-00805f9b34fb");
+    }
+}
+
 void BluezBluetoothManager::connectDevice(const QString &mac)
 {
     QString path = objectPathFromMac(mac);
@@ -453,8 +467,15 @@ void BluezBluetoothManager::connectDevice(const QString &mac)
             QDBusPendingReply<void> reply = *watcher;
             if (reply.isError()) {
                 qWarning() << "[BluezManager] Connect failed for" << mac << ":" << reply.error().message();
+                // Even if generic Connect failed (e.g. already connected for telephony), force audio profiles
+                if (!isInputDevice(mac)) {
+                    connectAudioProfiles(mac);
+                }
             } else {
                 qDebug() << "[BluezManager] Connect succeeded for" << mac;
+                if (!isInputDevice(mac)) {
+                    connectAudioProfiles(mac);
+                }
             }
             watcher->deleteLater();
         });
@@ -577,6 +598,9 @@ void BluezBluetoothManager::onPropertiesChanged(const QString &interface,
 
             if (isConnected) {
                 queryDeviceBattery(mac);
+                if (!isInputDevice(mac)) {
+                    connectAudioProfiles(mac);
+                }
                 emit deviceConnected(mac);
             } else {
                 // Instantly emit deviceDisconnected so IVI UI updates from Connected to Disconnected

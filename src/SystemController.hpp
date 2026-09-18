@@ -101,6 +101,7 @@ class SystemController : public QObject {
     Q_PROPERTY(QString androidAutoDeviceName READ androidAutoDeviceName NOTIFY androidAutoDeviceNameChanged)
     Q_PROPERTY(QString androidAutoStatus READ androidAutoStatus NOTIFY androidAutoStatusChanged)
     Q_PROPERTY(int androidAutoAoaVersion READ androidAutoAoaVersion NOTIFY androidAutoAoaVersionChanged)
+    Q_PROPERTY(bool androidAutoMediaPlaying READ androidAutoMediaPlaying NOTIFY androidAutoMediaPlayingChanged)
     Q_PROPERTY(QString androidAutoTargetMode READ androidAutoTargetMode WRITE setAndroidAutoTargetMode NOTIFY androidAutoTargetModeChanged)
     Q_PROPERTY(AndroidAutoManager* androidAutoManager READ androidAutoManager CONSTANT)
     Q_PROPERTY(int currentStationIndex READ currentStationIndex NOTIFY currentStationIndexChanged)
@@ -390,9 +391,15 @@ public:
     Q_INVOKABLE void triggerAndroidAutoHandshake();
     Q_INVOKABLE void startAndroidAuto();
     AndroidAutoManager* androidAutoManager() const { return m_androidAutoManager; }
+    bool androidAutoMediaPlaying() const { return m_androidAutoMediaPlaying; }
     Q_INVOKABLE void sendAndroidAutoTouch(int action, int x, int y);
     Q_INVOKABLE void sendAndroidAutoKey(int keyCode);
     Q_INVOKABLE void openAndroidAutoPhone();
+    Q_INVOKABLE void androidAutoMediaPlay();
+    Q_INVOKABLE void androidAutoMediaPause();
+    Q_INVOKABLE void androidAutoMediaPlayPause();
+    Q_INVOKABLE void androidAutoMediaNext();
+    Q_INVOKABLE void androidAutoMediaPrevious();
     int currentStationIndex() const { return m_currentStationIndex; }
     bool isPhoneConnected() const { return m_phoneConnected; }
     bool isBluetoothConnected() const { return m_bluetoothConnected; }
@@ -727,6 +734,7 @@ signals:
     void androidAutoAoaVersionChanged();
     void androidAutoTargetModeChanged();
     void androidAutoFrameReady(const QImage &frame);
+    void androidAutoMediaPlayingChanged();
     void currentStationIndexChanged();
     void reverseGearChanged();
     void volumeChanged();
@@ -919,6 +927,7 @@ private:
     bool m_isStationFavorited{true};
     bool m_radioLoading{false};
     bool m_usbConnected{false};
+    bool m_androidAutoMediaPlaying{false};
     int m_currentStationIndex{2};
     QVariantList m_stationList;
     QNetworkAccessManager *m_networkManager{nullptr};

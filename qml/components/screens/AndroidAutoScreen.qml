@@ -38,19 +38,19 @@ Rectangle {
         // 1. VIDEO RENDER ONLY (no touch logic in C++)
         AndroidAutoVideoItem {
             id: aaVideoView
-            anchors.fill: parent
+            width: parent.width
+            height: (videoWidth > 0 && videoHeight > 0) ? Math.min(parent.height, Math.round(parent.width * (videoHeight / videoWidth))) : parent.height
+            anchors.centerIn: parent
             controller: systemController
             visible: true
             opacity: hasVideo ? 1.0 : 0.0
             z: 10
         }
 
-        // 2. SOLE TOUCH OWNER — MultiPointTouchArea above video, below top pill bar
-        //    Captures all touch points (and mouse pointer via mouseEnabled: true)
-        //    Maps raw screen coords -> 1280x720 AA canvas -> systemController.sendAndroidAutoTouch
+        // 2. SOLE TOUCH OWNER — MultiPointTouchArea mapped 1:1 to video canvas
         MultiPointTouchArea {
             id: aaTouchArea
-            anchors.fill: parent
+            anchors.fill: aaVideoView
             z: 20
             minimumTouchPoints: 1
             maximumTouchPoints: 1

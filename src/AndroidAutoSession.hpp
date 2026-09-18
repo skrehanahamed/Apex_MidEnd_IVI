@@ -87,6 +87,8 @@ public:
     void sendKeyEvent(uint32_t keyCode);
     void requestVideoFocus(bool focused);
 
+    bool isMediaAudioActive() const { return m_mediaAudioActive.load(); }
+
 signals:
     void frameReady(const QImage &frame);
     void sessionStarted();
@@ -94,6 +96,7 @@ signals:
     void statusChanged(const QString &status);
     void exitRequested();
     void audioFocusGained();
+    void mediaPlaybackStateChanged(bool playing);
 
 protected:
     void run() override;
@@ -127,10 +130,10 @@ private:
     std::atomic<bool> m_mediaAudioActive{false};
     std::mutex m_cleanupMutex;
 
-    int m_videoWidth{1280};
-    int m_videoHeight{720};
-    int m_touchWidth{1280};
-    int m_touchHeight{720};
+    int m_videoWidth{1920};
+    int m_videoHeight{1080};
+    int m_touchWidth{1920};
+    int m_touchHeight{1080};
 
     AndroidAutoH264Decoder *m_decoder{nullptr};
     AndroidAutoAudioSink *m_audioSink{nullptr};
